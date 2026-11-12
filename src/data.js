@@ -54,6 +54,8 @@ export function worksOn(st, hor, dateStr, cambios) {
   // Un permiso de medio día no quita el día: solo acorta el turno
   if (c.some(x => x.rest === dateStr && !x.medio)) return false;
   if (c.some(x => x.work === dateStr)) return true;
+  // Horario flexible: puede trabajar cualquier día, sin hora fija
+  if (hor.flex) return true;
   const wd = new Date(dateStr + 'T12:00:00').getDay();
   if (!hor.dias.includes(wd)) return false;
   if (st.descanso != null && st.descanso >= 0 && Number(st.descanso) === wd) return false;
