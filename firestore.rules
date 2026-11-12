@@ -12,7 +12,7 @@ service cloud.firestore {
     function isAdmin()   { return hasMe() && role() == 'admin'; }
     function canUsers()  { return hasMe() && role() in ['admin', 'sistemas']; }
     function isMgr()     { return hasMe() && role() in ['admin', 'jefe']; }
-    function canPost()   { return hasMe() && role() in ['admin', 'jefe', 'encargada', 'fundador']; }
+    function canPost()   { return hasMe() && role() in ['admin', 'jefe', 'encargada', 'fundador', 'sistemas']; }
     function setupDone() { return exists(/databases/$(db)/documents/meta/setup); }
     // Solo durante la configuración inicial (antes de que exista meta/setup)
     function firstRun()  { return signed() && !setupDone(); }

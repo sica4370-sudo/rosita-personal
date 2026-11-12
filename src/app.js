@@ -111,7 +111,7 @@ const medioTxt = p => { const h = S.horarios[p.horario]; if (!h || !(p.medios ||
 const role = () => S.me ? S.me.role : null;
 const isAdmin = () => role() === 'admin';
 const isMgr = () => ['admin', 'jefe'].includes(role());
-const canPost = () => ['admin', 'jefe', 'encargada', 'fundador'].includes(role());
+const canPost = () => ['admin', 'jefe', 'encargada', 'fundador', 'sistemas'].includes(role());
 const canUsers = () => ['admin', 'sistemas'].includes(role());
 // Gerencia y fundadores supervisan: no marcan horario ni cuentan en el equipo de ninguna tienda
 const SUP = ['admin', 'fundador'];
@@ -587,7 +587,7 @@ function sheetHtml() {
     ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-pinsave ${S.busy ? 'disabled' : ''}>Guardar</button><button class="wide ghost" data-close>Cancelar</button>`);
   if (sh.kind === 'crear') {
     const op = (k, ic, t, s) => `<button class="crow" data-crear2="${k}"><span>${ic}</span><div><b>${t}</b><small>${s}</small></div></button>`;
-    return sheetWrap(`<h4>Crear</h4><div class="sub">¿Qué quieres compartir con el equipo?</div>${['encargada', 'jefe', 'admin'].includes(role()) ? op('foto', '📷', 'Foto de la tienda', 'Vitrina, producto nuevo, tienda lista') : ''}${['encargada', 'jefe', 'admin', 'fundador'].includes(role()) ? op('reco', '👏', 'Reconocer a alguien', role() === 'encargada' ? 'A alguien de tu tienda' : 'A cualquier persona') : ''}${op('anuncio', '📣', 'Anuncio', role() === 'encargada' ? 'Para tu tienda' : 'Para la empresa o una tienda')}<button class="wide ghost" data-close style="margin-top:6px">Cancelar</button>`);
+    return sheetWrap(`<h4>Crear</h4><div class="sub">¿Qué quieres compartir con el equipo?</div>${['encargada', 'jefe', 'admin', 'sistemas'].includes(role()) ? op('foto', '📷', 'Foto de la tienda', 'Vitrina, producto nuevo, tienda lista') : ''}${['encargada', 'jefe', 'admin', 'fundador', 'sistemas'].includes(role()) ? op('reco', '👏', 'Reconocer a alguien', role() === 'encargada' ? 'A alguien de tu tienda' : 'A cualquier persona') : ''}${op('anuncio', '📣', 'Anuncio', role() === 'encargada' ? 'Para tu tienda' : 'Para la empresa o una tienda')}<button class="wide ghost" data-close style="margin-top:6px">Cancelar</button>`);
   }
   if (sh.kind === 'anuncio') {
     const enc = role() === 'encargada';

@@ -3,7 +3,7 @@ export const ROLES = {
   admin:     { l: 'Gerencia',            d: 'Ve y administra todo: personal, horarios, tiendas y descansos' },
   fundador:  { l: 'Fundadores',          d: 'Ven quién llegó y publican anuncios' },
   jefe:      { l: 'Jefe de área',        d: 'Aprueba cambios de descanso de su departamento, publica anuncios y reconoce' },
-  sistemas:  { l: 'Sistemas',            d: 'Crea usuarios y restablece PINs' },
+  sistemas:  { l: 'Sistemas',            d: 'Crea usuarios, restablece PINs, publica anuncios y fotos y reconoce' },
   encargada: { l: 'Encargada de tienda', d: 'Publica fotos y anuncios en su tienda y reconoce a su equipo' },
   asesora:   { l: 'Asesora de ventas',   d: 'Marca entrada y salida y participa en el muro' },
   apoyo:     { l: 'Apoyo / oficina',     d: 'Marca entrada, almuerzo y salida' }
