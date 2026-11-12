@@ -357,12 +357,15 @@ function heroCard() {
   return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${hor.flex ? `${hor.flexIni && !e.late ? ' · a tiempo ✓' : ''} · salida libre` : `${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : ''}`}</p>
     <div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
 }
+// Reacciones a notas: notes/{sid}.rx = { persona: emoji }
+function noteRxBadge(n) { const v = Object.values(n.rx || {}); if (!v.length) return ''; const c = {}; v.forEach(e => c[e] = (c[e] || 0) + 1); return `<i class="nrxb">${Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 2).map(x => x[0]).join('')}${v.length > 1 ? v.length : ''}</i>`; }
+const noteRxList = n => Object.entries(n.rx || {}).map(([sid, e]) => { const p = dirP(sid); return p.n ? `<div class="nrxrow">${av(p)}<b>${esc(p.n)}</b><span>${e}</span></div>` : ''; }).join('');
 function notesRow() {
   const u = S.me, now = Date.now(), alive = n => n && n.tx && n.at && now - tsMs(n.at) < 864e5, live = Object.entries(S.notes).filter(([, n]) => alive(n));
   const mine = alive(S.notes[u.id]) ? S.notes[u.id] : null;
   const others = live.filter(([sid]) => sid !== u.id && P(sid)).map(([sid]) => dirP(sid))
     .sort((a, b) => (b.store === u.store) - (a.store === u.store) || tsMs(S.notes[b.id].at) - tsMs(S.notes[a.id].at));
-  const one = (p, me, n) => `<button class="inote ${me ? 'me' : ''} ${n ? '' : 'empty'}" data-note="${p.id}"><div class="nbub"><p>${n ? esc(n.tx) : 'Tu nota…'}${me && !n ? '<b>+</b>' : ''}</p></div><i class="tail"></i>${av(p)}<span>${me ? 'Tu nota' : esc(first(p.n))}</span></button>`;
+  const one = (p, me, n) => `<button class="inote ${me ? 'me' : ''} ${n ? '' : 'empty'}" data-note="${p.id}"><div class="nbub"><p>${n ? esc(n.tx) : 'Tu nota…'}${me && !n ? '<b>+</b>' : ''}</p>${n ? noteRxBadge(n) : ''}</div><i class="tail"></i>${av(p)}<span>${me ? 'Tu nota' : esc(first(p.n))}</span></button>`;
   return `<div class="notes">${one({ ...u, photo: S.me.photo }, true, mine)}${others.map(p => one(p, false, S.notes[p.id])).join('')}</div>`;
 }
 function tiendaHoy() {
@@ -615,6 +618,7 @@ function sheetHtml() {
     <div class="npreview"><div class="nbub big"><p id="nprev">${v ? esc(v) : '¿Qué está pasando?'}</p></div>${av(S.me)}</div>
     <div style="position:relative"><input id="n_tx" maxlength="60" class="fin" value="${esc(v)}" placeholder="Comparte algo corto con el equipo" autocomplete="off" style="padding-right:52px"><span id="ncount" class="ncount">${v.length}/60</span></div>
     <div class="ideas" style="margin:4px 0 12px">${NEMO.map(e => `<button data-nemo="${e}">${e}</button>`).join('')}</div>
+    ${n && Object.keys(n.rx || {}).length ? `<div class="h3" style="margin:4px 0 6px">Reacciones a tu nota</div><div class="nrxlist">${noteRxList(n)}</div>` : ''}
     <button class="wide" data-nsave>Compartir nota</button>${n ? '<button class="wide ghost" data-ndel>Borrar mi nota</button>' : '<button class="wide ghost" data-close>Cancelar</button>'}`);
   }
   if (sh.kind === 'insignia') { const bs = BADGES.filter(x => sh.keys.includes(x[0])); return sheetWrap(`<div style="text-align:center"><div class="bnew">${bs.map(x => x[1]).join(' ')}</div><h4>${bs.length > 1 ? '¡Nuevas insignias!' : '¡Nueva insignia!'}</h4>
@@ -630,6 +634,8 @@ function sheetHtml() {
   if (sh.kind === 'vernota') {
     const p = dirP(sh.id), n = S.notes[sh.id];
     return sheetWrap(`<div style="text-align:center"><div class="npreview"><div class="nbub big"><p>${esc(n.tx)}</p></div>${av(p)}</div><b style="font-size:16px">${esc(p.n)}</b><div class="sub" style="margin-top:2px">${esc(p.puesto || '')}${isSup(p) ? '' : ` · ${esc(storeN(p.store))}`} · ${ago(tsMs(n.at))}</div>${n.bio ? `<div class="biov">“${esc(n.bio)}”</div>` : ''}
+    <div class="nrxbar">${RX.map(([e, l]) => `<button data-nrx="${e}" class="${(n.rx || {})[S.me.id] === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>
+    ${Object.keys(n.rx || {}).length ? `<div class="sub" style="margin:2px 0 0">${Object.keys(n.rx).length} ${Object.keys(n.rx).length === 1 ? 'reacción' : 'reacciones'}</div>` : ''}
     ${isMgr() ? '<button class="peek" data-nhide style="color:var(--warn)">Ocultar esta nota</button>' : ''}<button class="wide ghost" data-close>Cerrar</button></div>`);
   }
   return '';
@@ -1021,11 +1027,15 @@ document.addEventListener('click', async e => {
   if (d.pdel) { if (!confirmDel()) return; try { await deleteDoc(D('posts', d.pdel)); toast('Publicación borrada'); } catch (er) { toast('No se pudo borrar'); } return; }
   if (d.note) { S.sheet = d.note === S.me.id ? { kind: 'nota' } : ((S.notes[d.note] || {}).tx ? { kind: 'vernota', id: d.note } : null); render(); if (d.note === S.me.id) setTimeout(() => { const i = $('#n_tx'); i && i.focus(); }, 50); return; }
   if (d.nemo) { const i = $('#n_tx'); if (i.value.length + d.nemo.length <= 60) i.value = (i.value + ' ' + d.nemo).trim(); i.dispatchEvent(new Event('input', { bubbles: true })); return; }
-  if (d.nsave !== undefined) { const v = $('#n_tx').value.trim(); if (!v) return toast('Escribe tu nota'); try { await setDoc(D('notes', S.me.id), { tx: v.slice(0, 60), at: Date.now() }, { merge: true }); S.sheet = null; render(); toast('Nota compartida · dura 24 horas'); } catch (er) { toast('No se pudo guardar'); } return; }
+  if (d.nsave !== undefined) { const v = $('#n_tx').value.trim(); if (!v) return toast('Escribe tu nota'); try { const same = (S.notes[S.me.id] || {}).tx === v.slice(0, 60); await setDoc(D('notes', S.me.id), { tx: v.slice(0, 60), at: Date.now(), ...(same ? {} : { rx: deleteField() }) }, { merge: true }); S.sheet = null; render(); toast('Nota compartida · dura 24 horas'); } catch (er) { toast('No se pudo guardar'); } return; }
+  if (d.nrx) { const id = S.sheet && S.sheet.id, n = id && S.notes[id]; if (!n) return;
+    const off = (n.rx || {})[S.me.id] === d.nrx, rx = { ...(n.rx || {}) }; if (off) delete rx[S.me.id]; else rx[S.me.id] = d.nrx; n.rx = rx; render();
+    try { await updateDoc(D('notes', id), { [`rx.${S.me.id}`]: off ? deleteField() : d.nrx }); if (!off) toast(`Reaccionaste ${d.nrx} a la nota de ${first(dirP(id).n)}`); } catch (er) { console.error(er); toast('No se pudo reaccionar. Revisa tu internet.'); }
+    return; }
   if (d.bio !== undefined) { S.sheet = { kind: 'bio' }; render(); setTimeout(() => { const i = $('#b_tx'); i && i.focus(); }, 50); return; }
   if (d.bsave !== undefined || d.bdel !== undefined) { const v = d.bdel !== undefined ? '' : $('#b_tx').value.trim().slice(0, 80);
     try { await setDoc(D('notes', S.me.id), { bio: v || deleteField() }, { merge: true }); S.notes[S.me.id] = { ...(S.notes[S.me.id] || {}), bio: v }; S.sheet = null; render(); toast(v ? 'Frase guardada ✨' : 'Frase quitada'); } catch (er) { console.error(er); toast('No se pudo guardar'); } return; }
-  if (d.ndel !== undefined) { try { await setDoc(D('notes', S.me.id), { tx: deleteField(), at: deleteField() }, { merge: true }); S.sheet = null; render(); } catch (er) { } return; }
+  if (d.ndel !== undefined) { try { await setDoc(D('notes', S.me.id), { tx: deleteField(), at: deleteField(), rx: deleteField() }, { merge: true }); S.sheet = null; render(); } catch (er) { } return; }
   if (d.nhide !== undefined) { try { await deleteDoc(D('notes', S.sheet.id)); S.sheet = null; render(); toast('Nota ocultada'); } catch (er) { toast('No se pudo ocultar'); } return; }
   if (d.story) { const a = ((S.today || {}).arr || {})[d.story], p = P(d.story); toast(a ? `${first(p.n)} llegó a las ${a.t} ☀️` : `${first(p.n)} todavía no llega`); return; }
 });

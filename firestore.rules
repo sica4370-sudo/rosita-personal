@@ -91,6 +91,9 @@ service cloud.firestore {
     match /notes/{sid} {
       allow read: if hasMe();
       allow write: if hasMe() && me().sid == sid;
+      // Cualquiera puede reaccionar a una nota: solo toca su propia reacción
+      allow update: if hasMe() && onlyKeys(['rx'])
+        && request.resource.data.get('rx', {}).diff(resource.data.get('rx', {})).affectedKeys().hasOnly([me().sid]);
       allow delete: if hasMe() && (me().sid == sid || isMgr());
     }
   }
