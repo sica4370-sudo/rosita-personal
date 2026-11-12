@@ -51,3 +51,8 @@ select.fin{appearance:auto}
 .wide:disabled{opacity:.55}
 .pdots{border:none;background:none;padding:4px}
 .rload{height:100%}
+
+/* Sin zoom en el celular: los campos a 16px evitan el acercamiento automático al escribir */
+html,body{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+input:not([type=checkbox]):not([type=radio]):not(.codein input),textarea,select,.fin,.search input{font-size:16px!important}
+.codein input{font-size:26px!important}
