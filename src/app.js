@@ -1,8 +1,8 @@
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, connectAuthEmulator, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, deleteField } from 'firebase/firestore';
 import { firebaseConfig, LOGIN_DOMAIN, TZ, VERSION } from './config.js';
-import { ROLES, ROLE_ORDER, DEPTS, DIAS, DIAS_C, MESES, STORES_SEED, HORARIOS_SEED, RCATS, FTAGS, NEMO, COLORS, worksOn, restReason } from './data.js';
+import { ROLES, ROLE_ORDER, DEPTS, DIAS, DIAS_C, MESES, STORES_SEED, HORARIOS_SEED, RCATS, FTAGS, NEMO, COLORS, RX, worksOn, restReason } from './data.js';
 
 /* ================== FIREBASE ================== */
 const EMU = /[?&]emu=1/.test(location.search) || location.hostname === 'localhost' && /[?&]emu/.test(location.search);
@@ -87,6 +87,20 @@ const pushRecent = sid => { try { localStorage.setItem(RECENT_KEY, JSON.stringif
 const P = sid => S.staff[sid] || S.dir.find(x => x.id === sid);
 const storeN = k => (S.stores[k] || {}).n || '—';
 const myHor = () => S.me && S.horarios[S.me.horario];
+// Punto de corte del medio día: el que se le asignó a la persona o la mitad del turno
+const corte = (p, h) => p.medioH || fmtMin(Math.round((toMin(h.ini) + toMin(h.fin)) / 2 / 30) * 30);
+// Horario real de una persona en una fecha: considera sus días de medio día y los permisos de medio día
+function horDe(p, day) {
+  const h = p && S.horarios[p.horario]; if (!h) return null;
+  const wd = new Date(day + 'T12:00:00').getDay(), cut = corte(p, h);
+  const perm = S.cambios.find(c => c.sid === p.id && c.tipo === 'permiso' && c.estado === 'aprobado' && c.rest === day && c.medio);
+  let t = null, why = '';
+  if (perm) { t = perm.medio === 'am' ? 'pm' : 'am'; why = 'permiso'; }
+  else if ((p.medios || []).includes(wd)) { t = p.medioT || 'am'; why = 'medio'; }
+  if (!t) return h;
+  return { ...h, ini: t === 'am' ? h.ini : cut, fin: t === 'am' ? cut : h.fin, lunch: 0, medio: t, why };
+}
+const medioTxt = p => { const h = S.horarios[p.horario]; if (!h || !(p.medios || []).length) return ''; return `Medio día ${p.medios.map(d => DIAS_C[d]).join(', ')} (${(p.medioT || 'am') === 'am' ? `${h.ini}–${corte(p, h)}` : `${corte(p, h)}–${h.fin}`})`; };
 const role = () => S.me ? S.me.role : null;
 const isAdmin = () => role() === 'admin';
 const isMgr = () => ['admin', 'jefe'].includes(role());
@@ -204,8 +218,8 @@ const loadView = () => `<div class="rload"><img class="hop" src="rosita.svg" alt
 
 /* ================== VISTAS: APP ================== */
 function todayInfo(st) {
-  const day = nowParts().day, hor = S.horarios[st.horario];
-  return { day, hor, works: worksOn(st, hor, day, S.cambios) };
+  const day = nowParts().day, hor = horDe(st, day);
+  return { day, hor, works: worksOn(st, S.horarios[st.horario], day, S.cambios) };
 }
 function myState() {
   const m = S.myMarks; if (!m.length) return 'fuera';
@@ -218,12 +232,12 @@ function heroCard() {
   if (!hor) return `<div class="hero h-off"><small>${hr}, ${esc(first(u.n))}</small><h2>Sin horario asignado</h2><p>Pídele a Gerencia que te asigne un horario.</p></div>`;
   if (!works && st === 'fuera') {
     const r = restReason(u, hor, day, S.cambios);
-    return `<div class="hero h-off"><small>${DIAS[new Date(day + 'T12:00:00').getDay()]}</small><h2>Hoy descansas 🌷</h2><p>${r.k === 'cambio' ? `Cambiaste tu descanso: trabajas el ${niceDate(r.c.work)}` : r.k === 'descanso' ? 'Es tu día de descanso' : 'Hoy no tienes turno'}</p></div>`;
+    return `<div class="hero h-off"><small>${DIAS[new Date(day + 'T12:00:00').getDay()]}</small><h2>${r.k === 'permiso' ? 'Hoy tienes permiso 📝' : 'Hoy descansas 🌷'}</h2><p>${r.k === 'permiso' ? 'Tu permiso está aprobado. ¡Que te vaya bien!' : r.k === 'cambio' ? `Cambiaste tu descanso: trabajas el ${niceDate(r.c.work)}` : r.k === 'descanso' ? 'Es tu día de descanso' : 'Hoy no tienes turno'}</p></div>`;
   }
   const ini0 = toMin(hor.ini);
   if (st === 'fuera') {
     const late = np.min - ini0, free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role);
-    return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>${late > 120 ? 'No has marcado tu entrada' : late > (hor.tol || 5) ? `Vas ${late} min tarde` : `Tu entrada es a las ${hor.ini}`}</h2>
+    return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>${late > 120 ? 'No has marcado tu entrada' : late > (hor.tol || 5) ? `Vas ${late} min tarde` : `Tu entrada es a las ${hor.ini}`}</h2>${hor.medio ? `<p>☀️ Hoy trabajas medio día: ${hor.ini}–${hor.fin}</p>` : ''}
       <p>${ico('pin')} ${free ? 'Desde la oficina, una tienda u otro lugar' : esc(storeN(u.store))}</p>
       <button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} ${S.busy ? 'Verificando ubicación…' : 'Marcar entrada'}</button></div>`;
   }
@@ -233,7 +247,7 @@ function heroCard() {
   }
   if (st === 'salio') return `<div class="hero h-done"><small>Hasta mañana</small><h2>Jornada terminada</h2><p>¡Gracias por tu día, ${esc(first(u.n))}! 🌙</p></div>`;
   const e = S.myMarks.find(x => x.type === 'entrada'), lunchOk = hor.lunch > 0 && !S.myMarks.some(x => x.type === 'almuerzo');
-  return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}</p>
+  return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : ''}</p>
     <div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
 }
 function notesRow() {
@@ -253,8 +267,15 @@ function tiendaHoy() {
     <div class="stories">${team.map(p => `<button class="story ${arr[p.id] ? '' : 'off'}" data-story="${p.id}"><div class="ring">${av(dirP(p.id))}</div><span>${p.id === u.id ? 'Tú' : esc(first(p.n))}</span></button>`).join('') || '<div class="empty">Nadie programado hoy.</div>'}</div></div>`;
 }
 const dirP = sid => { const s = S.staff[sid] || {}, d = S.dir.find(x => x.id === sid) || {}; return { ...s, ...d, id: sid, n: s.n || d.n }; };
+// Reacciones: likedBy guarda { persona: emoji } (los "me gusta" viejos, guardados como true, cuentan como ❤️)
+const rxOf = v => v === true ? '❤️' : v;
+function rxSummary(it) {
+  const cnt = {}; Object.values(it.likedBy || {}).forEach(v => { const e = rxOf(v); cnt[e] = (cnt[e] || 0) + 1; });
+  const top = Object.entries(cnt).sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
+  return { n: Object.values(cnt).reduce((a, b) => a + b, 0), top };
+}
 function postCard(it) {
-  const u = S.me, p = dirP(it.by), liked = !!(it.likedBy || {})[u.id], n = Object.keys(it.likedBy || {}).length;
+  const u = S.me, p = dirP(it.by), mine = rxOf((it.likedBy || {})[u.id]), { n, top } = rxSummary(it), open = S.rxOpen === it.id;
   let body = '', badge = '';
   if (it.kind === 'anuncio') {
     badge = `<span class="rt ${it.aud && it.aud !== 'all' ? 'enc' : 'jef'}">📣 ${it.aud && it.aud !== 'all' ? esc(storeN(it.aud)) : 'Toda la empresa'}</span>`;
@@ -266,9 +287,10 @@ function postCard(it) {
   }
   if (it.kind === 'foto') { badge = `<span class="rt auto">${esc(it.tag || '📷')}</span>`; body = `<div class="pfoto"><img src="${it.img}" alt="" loading="lazy"></div><div class="pcap" style="padding-top:8px"><b>${esc(first(p.n))}</b> ${nl(it.tx || '')}</div>`; }
   const sub = it.kind === 'foto' ? `${esc(storeN(it.store))} · ${esc((S.stores[it.store] || {}).city || '')}` : `${esc(p.puesto || '')}`;
-  return `<article class="post"><div class="ph2">${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div>${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
-  <div class="pact"><button data-like="${it.id}" class="lk ${liked ? 'on' : ''}">${ico('heart')}</button><button data-clap="${it.id}">${ico('comment')}</button></div>
-  <div class="pmeta">${n ? `<b>${n} Me gusta</b>` : '<span class="first">Sé la primera en reaccionar</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
+  return `<article class="post" data-post="${it.id}"><div class="ph2">${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div>${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
+  <div class="pact rxwrap">${open ? `<div class="rxbar">${RX.map(([e, l]) => `<button data-rxe="${e}" data-rxp="${it.id}" class="${mine === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>` : ''}
+    <button type="button" data-rx="${it.id}" class="rxbtn ${mine ? 'on' : ''}">${mine ? `<span class="rxe">${mine}</span>${(RX.find(x => x[0] === mine) || [0, 'Reaccionaste'])[1]}` : `${ico('heart')}Reaccionar`}</button></div>
+  <div class="pmeta">${n ? `<b class="rxsum"><span>${top.join('')}</span> ${n === 1 && mine ? 'Tú' : mine ? `Tú y ${n - 1} más` : n}</b>` : '<span class="first">Sé la primera en reaccionar</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
 }
 function llegadasCard() {
   const u = S.me, arr = (S.today || {}).arr || {};
@@ -305,16 +327,21 @@ function viewMarcar() {
   const u = S.me, hor = myHor();
   let h = `<div class="hwrap" style="padding-top:14px">${heroCard()}</div><div style="padding:0 16px">`;
   h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li><span class="tm">${m.hm}</span><span style="flex:1">${{ entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida' }[m.type]}</span>${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
-  h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}` : 'Sin horario asignado'}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b></div>`;
+  h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}${medioTxt(u) ? `<br>${medioTxt(u)}` : ''}` : 'Sin horario asignado'}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b></div>`;
   h += misCambios();
   return h + `</div>`;
 }
 function misCambios() {
   const u = S.me, mine = S.cambios.filter(c => c.sid === u.id).sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 5);
-  return `<div class="h3">Mover mi descanso</div>
+  return `<div class="h3">Descansos y permisos</div>
   <button class="act sec" data-cnew style="padding:12px;font-size:15px;width:100%"><span class="ic">${ico('swap')}</span><span>Cambiar un día de descanso<small>En vez de perder el día, lo mueves a otra fecha</small></span></button>
-  ${mine.length ? `<ul class="tl" style="margin-top:6px">${mine.map(c => `<li style="flex-wrap:wrap"><span style="flex:1">Descansa <b>${niceDate(c.rest)}</b> · trabaja <b>${niceDate(c.work)}</b><small style="display:block;color:#65676b">${esc(c.mot || '')}</small></span>${chipC(c)}</li>`).join('')}</ul>` : ''}`;
+  <button class="act sec" data-pnew style="padding:12px;font-size:15px;width:100%;margin-top:8px"><span class="ic">${ico('cal')}</span><span>Pedir permiso<small>Día completo o medio día · se descuenta</small></span></button>
+  ${mine.length ? `<ul class="tl" style="margin-top:6px">${mine.map(c => `<li style="flex-wrap:wrap"><span style="flex:1">${cambioTxt(c)}<small style="display:block;color:#65676b">${esc(c.mot || '')}</small></span>${chipC(c)}</li>`).join('')}</ul>` : ''}`;
 }
+const MEDIO_L = { am: 'medio día (mañana)', pm: 'medio día (tarde)' };
+const cambioTxt = c => c.tipo === 'permiso'
+  ? `📝 Permiso <b>${niceDate(c.rest)}</b> · ${c.medio ? MEDIO_L[c.medio] : 'día completo'} · se descuenta`
+  : `Descansa <b>${niceDate(c.rest)}</b> · trabaja <b>${niceDate(c.work)}</b>`;
 const chipC = c => c.estado === 'pendiente' ? '<span class="st y">Pendiente</span>' : c.estado === 'aprobado' ? `<span class="st g">✓ Aprobado</span>` : '<span class="st p" style="color:var(--warn)">✕ Rechazado</span>';
 function viewPerfil() {
   const u = S.me, hor = myHor(), recos = S.posts.filter(x => x.kind === 'reco' && x.to === u.id);
@@ -352,7 +379,7 @@ function viewMiTienda() {
   const team = Object.values(S.staff).filter(p => p.active !== false && p.store === u.store);
   return `<div style="padding:14px 16px"><div class="h3" style="margin-top:0">${esc(storeN(u.store))} <span>${team.length} personas</span></div>` + team.map(p => {
     const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id];
-    return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}</small></div>${!w ? '<span class="st p">descansa</span>' : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
+    return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}</small></div>${!w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
   }).join('') + `<div class="note">Tus compañeras ven si ya llegaste, nunca tus tardanzas. Eso solo lo ven tus jefes.</div></div>`;
 }
 function viewLive() {
@@ -360,21 +387,21 @@ function viewLive() {
   const ppl = Object.values(S.staff).filter(p => p.active !== false && !['admin', 'fundador'].includes(p.role));
   const exp = ppl.filter(p => worksOn(p, S.horarios[p.horario], day, S.cambios));
   const pres = exp.filter(p => arr[p.id]), late = exp.filter(p => arr[p.id] && arr[p.id].late > 0), npm = nowParts().min;
-  const miss = exp.filter(p => !arr[p.id] && S.horarios[p.horario] && npm > toMin(S.horarios[p.horario].ini) + (S.horarios[p.horario].tol || 5));
+  const miss = exp.filter(p => { const h = horDe(p, day); return !arr[p.id] && h && npm > toMin(h.ini) + (h.tol || 5); });
   let h = `<div class="kpis2"><div><b>${pres.length}/${exp.length}</b><span>llegaron</span></div><div class="w"><b>${late.length}</b><span>tarde</span></div><div class="w"><b>${miss.length}</b><span>sin marcar</span></div><div><b>${ppl.length - exp.length}</b><span>descansan</span></div></div>`;
   const stores = Object.values(S.stores).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
   for (const st of stores) {
     const team = ppl.filter(p => p.store === st.id); if (!team.length) continue;
     h += `<div class="h3">${esc(st.n)} <span>${team.filter(p => arr[p.id]).length}/${team.filter(p => worksOn(p, S.horarios[p.horario], day, S.cambios)).length}</span></div><div class="lcard">`;
     for (const p of team) {
-      const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id], hor = S.horarios[p.horario];
+      const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id], hor = horDe(p, day);
       let chip;
-      if (!w) { const r = restReason(p, hor, day, S.cambios); chip = `<span class="st p">${r.k === 'cambio' ? '🔁 descanso movido' : 'descansa'}</span>`; }
+      if (!w) { const r = restReason(p, hor, day, S.cambios); chip = `<span class="st p">${r.k === 'permiso' ? '📝 permiso' : r.k === 'cambio' ? '🔁 descanso movido' : 'descansa'}</span>`; }
       else if (out[p.id]) chip = `<span class="st b">salió ${out[p.id]}</span>`;
       else if (lunch[p.id] && !lunch[p.id].r) chip = `<span class="st y">almuerzo ${lunch[p.id].o}</span>`;
       else if (a) chip = `<span class="st ${a.late > 0 ? 'y' : 'g'}">${a.t}${a.late > 0 ? ` · +${a.late} min` : ' ✓'}${a.far ? ' · 📍fuera' : ''}</span>`;
       else chip = miss.includes(p) ? '<span class="st" style="background:var(--warn-bg);color:var(--warn)">sin marcar</span>' : `<span class="st p">entra ${hor ? hor.ini : '—'}</span>`;
-      h += `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}</small></div>${chip}</div>`;
+      h += `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${w && hor && hor.medio ? ` · ½ día ${hor.ini}–${hor.fin}${hor.why === 'permiso' ? ' (permiso)' : ''}` : ''}</small></div>${chip}</div>`;
     }
     h += `</div>`;
   }
@@ -388,7 +415,7 @@ function viewPeople() {
   for (const p of all) {
     if (p.store !== cur) { cur = p.store; h += `<div class="gh" style="margin:14px 2px 6px">${esc(storeN(cur))}</div>`; }
     const hor = S.horarios[p.horario];
-    h += `<button class="urow ${p.active === false ? 'off' : ''}" data-uedit="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}${p.active === false ? ' · inactiva' : ''}</b><small>${esc((ROLES[p.role] || {}).l || p.role)} · ${hor ? `${hor.ini}–${hor.fin}` : 'sin horario'} · descansa ${p.descanso >= 0 ? DIAS_C[p.descanso] : '—'}</small></div>${ico('edit')}</button>`;
+    h += `<button class="urow ${p.active === false ? 'off' : ''}" data-uedit="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}${p.active === false ? ' · inactiva' : ''}</b><small>${esc((ROLES[p.role] || {}).l || p.role)} · ${hor ? `${hor.ini}–${hor.fin}` : 'sin horario'} · descansa ${p.descanso >= 0 ? DIAS_C[p.descanso] : '—'}${(p.medios || []).length ? ` · ½ día ${p.medios.map(d => DIAS_C[d]).join(' ')}` : ''}</small></div>${ico('edit')}</button>`;
   }
   return h;
 }
@@ -405,14 +432,14 @@ function viewStores() {
 const canDecide = c => isAdmin() || (role() === 'jefe' && S.me.dept === c.dept && c.sid !== S.me.id);
 function viewCambios() {
   const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)), rest = S.cambios.filter(c => c.estado !== 'pendiente').sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 20);
-  let h = `<button class="wide" data-cnew2 style="margin-bottom:12px">${ico('swap')} Mover el descanso de alguien</button><div class="note" style="margin:0 0 12px">Cuando alguien necesita faltar un día, en vez de descontarle se mueve su descanso: descansa ese día y trabaja su día de descanso normal (u otro que acuerden).</div>`;
+  let h = `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="wide" data-cnew2 style="margin:0;flex:1">${ico('swap')} Mover descanso</button><button class="wide ghost" data-pnew2 style="margin:0;flex:1">${ico('cal')} Dar permiso</button></div><div class="note" style="margin:0 0 12px">Cuando alguien necesita faltar, hay dos caminos: <b>mover su descanso</b> (descansa ese día y trabaja otro, sin descuento) o darle un <b>permiso</b> de día completo o medio día, que <b>se descuenta</b>.</div>`;
   h += `<div class="h3" style="margin-top:0">Por aprobar <span>${pend.length}</span></div>` + (pend.length ? pend.map(c => cambioRow(c, true)).join('') : '<div class="empty">Sin solicitudes pendientes.</div>');
   h += `<div class="h3">Historial</div>` + (rest.length ? rest.map(c => cambioRow(c, false)).join('') : '<div class="empty">Todavía no hay cambios.</div>');
   return h;
 }
 function cambioRow(c, act) {
   const p = dirP(c.sid);
-  return `<div class="crowc">${av(p)}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>Descansa <b>${niceDate(c.rest)}</b> · trabaja <b>${niceDate(c.work)}</b>${c.mot ? ` · “${esc(c.mot)}”` : ''}</small></div>${act ? `<div class="paybtns"><button data-cok="${c.id}">✓</button><button data-cno="${c.id}" style="color:var(--warn)">✕</button></div>` : chipC(c)}</div>`;
+  return `<div class="crowc">${av(p)}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${cambioTxt(c)}${c.mot ? ` · “${esc(c.mot)}”` : ''}</small></div>${act ? `<div class="paybtns"><button data-cok="${c.id}">✓</button><button data-cno="${c.id}" style="color:var(--warn)">✕</button></div>` : chipC(c)}</div>`;
 }
 
 /* ===== HOJAS (bottom sheets) ===== */
@@ -426,6 +453,7 @@ function sheetHtml() {
   if (sh.kind === 'hor') return horSheet(sh);
   if (sh.kind === 'store') return storeSheet(sh);
   if (sh.kind === 'cambio') return cambioSheet(sh);
+  if (sh.kind === 'permiso') return permisoSheet(sh);
   if (sh.kind === 'pin') return sheetWrap(`<h4>Cambiar mi PIN</h4><div class="sub">Necesitas tu PIN actual</div>
     <input id="p_old" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="PIN actual"><input id="p_new" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="PIN nuevo"><input id="p_new2" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="Repite el PIN nuevo">
     ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-pinsave ${S.busy ? 'disabled' : ''}>Guardar</button><button class="wide ghost" data-close>Cancelar</button>`);
@@ -478,6 +506,12 @@ function userSheet(sh) {
   <label class="lbl">Dónde trabaja</label><select id="u_s" class="fin">${Object.values(S.stores).sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).map(s => opt(s.id, s.n + ' · ' + (s.city || ''), u.store || 'of')).join('')}</select>
   <label class="lbl">Horario</label><select id="u_h" class="fin">${hs.map(x => opt(x.id, `${x.n} · ${x.ini}–${x.fin}`, u.horario || suggestHor(u.store || 'of'))).join('')}</select>
   <label class="lbl">Día de descanso</label><select id="u_ds" class="fin">${opt(-1, 'Según su horario (sin día fijo)', u.descanso ?? -1)}${DIAS.map((d, i) => opt(i, d, u.descanso ?? -1)).join('')}</select>
+  <label class="lbl">Días de medio día <span style="font-weight:400;color:#737373">(opcional)</span></label>
+  <div class="daypick" id="u_md">${DIAS_C.map((d, i) => `<label><input type="checkbox" value="${i}" ${(u.medios || []).includes(i) ? 'checked' : ''}><span>${d}</span></label>`).join('')}</div>
+  <div class="rsmall" style="margin:4px 0 6px">Marca los días en que solo trabaja medio turno.</div>
+  <div style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Ese día trabaja</label><select id="u_mt" class="fin">${opt('am', 'En la mañana', u.medioT || 'am')}${opt('pm', 'En la tarde', u.medioT || 'am')}</select></div>
+  <div style="flex:1"><label class="lbl">Hora de corte</label><input id="u_mh" class="fin" type="time" value="${esc(u.medioH || '')}" placeholder="13:00"></div></div>
+  <div class="rsmall" style="margin:4px 0 8px">Mañana: sale a esa hora. Tarde: entra a esa hora. Si la dejas vacía se usa la mitad de su horario.</div>
   <label class="lbl">Cumpleaños <span style="font-weight:400;color:#737373">(opcional, para felicitarla)</span></label><input id="u_b" class="fin" type="date" value="${u.cumple ? '2000-' + u.cumple : ''}">
   ${isNew ? `<label class="lbl">PIN inicial (4 dígitos)</label><input id="u_pin" class="fin" inputmode="numeric" maxlength="4" value="${esc(sh.pin || '')}"><div class="rsmall" style="margin:-4px 0 8px">Dáselo en persona. Puede cambiarlo después desde su perfil.</div>` : ''}
   ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}
@@ -526,6 +560,33 @@ function cambioSheet(sh) {
   <label class="lbl">Motivo</label><input id="c_mot" class="fin" value="${esc(sh.mot || '')}" placeholder="Ej.: trámite personal">` : ''}
   ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-csave ${S.busy || !who ? 'disabled' : ''}>${forOther ? 'Guardar y aprobar' : 'Enviar solicitud'}</button><button class="wide ghost" data-close>Cancelar</button>`);
 }
+function permisoSheet(sh) {
+  const forOther = sh.other, today = nowParts().day;
+  const who = forOther ? (sh.sid ? S.staff[sh.sid] : null) : S.me;
+  const pool = forOther ? Object.values(S.staff).filter(p => p.active !== false && (isAdmin() || p.dept === S.me.dept)) : [];
+  let dayOpts = '';
+  if (who) { const hor = S.horarios[who.horario]; for (let i = 0; i < 31; i++) { const d = addDays(today, i); if (worksOn(who, hor, d, S.cambios)) dayOpts += opt(d, niceDate(d) + (i === 0 ? ' · hoy' : ''), sh.day); } }
+  const dur = sh.medio || '';
+  return sheetWrap(`<h4>📝 ${forOther ? 'Dar permiso' : 'Pedir permiso'}</h4><div class="sub">El tiempo del permiso se descuenta del pago</div>
+  ${forOther ? `<label class="lbl">Persona</label><select id="p_sid" class="fin">${opt('', 'Elige a la persona', sh.sid || '')}${pool.map(p => opt(p.id, p.n + ' · ' + storeN(p.store), sh.sid)).join('')}</select>` : ''}
+  ${who ? `<label class="lbl">Día del permiso</label><select id="p_day" class="fin">${dayOpts || opt('', 'No hay días de trabajo próximos', '')}</select>
+  <label class="lbl">¿Cuánto tiempo?</label><div class="ideas" style="margin-bottom:6px">${[['', 'Día completo'], ['am', 'Medio día · mañana'], ['pm', 'Medio día · tarde']].map(([k, l]) => `<button data-pdur="${k}" class="${dur === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+  <div class="rsmall" style="margin:0 0 6px">${dur === 'am' ? 'Falta en la mañana y entra a trabajar a mediodía.' : dur === 'pm' ? 'Trabaja la mañana y se retira a mediodía.' : 'No se presenta ese día.'}</div>
+  <label class="lbl">Motivo</label><input id="p_mot" class="fin" value="${esc(sh.mot || '')}" placeholder="Ej.: cita médica, trámite personal">` : ''}
+  ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-psave ${S.busy || !who ? 'disabled' : ''}>${forOther ? 'Guardar y aprobar' : 'Enviar solicitud'}</button><button class="wide ghost" data-close>Cancelar</button>`);
+}
+async function savePermiso() {
+  const sh = S.sheet, sid = sh.other ? $('#p_sid').value : S.me.id, day = $('#p_day') && $('#p_day').value, mot = (($('#p_mot') || {}).value || '').trim();
+  Object.assign(sh, { sid, day, mot });
+  if (!sid || !day) { sh.err = 'Elige el día del permiso'; return render(); }
+  if (mot.length < 3) { sh.err = 'Escribe el motivo'; return render(); }
+  const p = S.staff[sid]; S.busy = true; render();
+  try {
+    const auto = sh.other && (isAdmin() || (role() === 'jefe' && p.dept === S.me.dept));
+    await addDoc(C('cambios'), { tipo: 'permiso', sid, dept: p.dept, store: p.store, rest: day, work: null, medio: sh.medio || null, descuento: true, mot, estado: auto ? 'aprobado' : 'pendiente', by: S.me.id, at: serverTimestamp(), ...(auto ? { decidedBy: S.me.id } : {}) });
+    S.busy = false; S.sheet = null; render(); toast(auto ? 'Permiso registrado' : 'Permiso enviado a tu jefe');
+  } catch (e) { console.error(e); S.busy = false; sh.err = e.code || e.message; render(); }
+}
 
 /* ================== RENDER ================== */
 function render() {
@@ -538,7 +599,8 @@ function render() {
   const title = { inicio: '', marcar: 'Marcar', equipo: gt ? 'Gestión' : 'Mi tienda', perfil: 'Perfil' }[t];
   const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)).length;
   const body = { inicio: viewInicio, marcar: viewMarcar, equipo: viewGestion, perfil: viewPerfil }[t]();
-  const sc = $('.sbody') ? $('.sbody').scrollTop : 0, keep = S._keepScroll; S._keepScroll = false;
+  // Conserva la posición de la pantalla en cada actualización (reacciones, datos en vivo, reloj); solo vuelve arriba al cambiar de pestaña
+  const sc = $('.sbody') ? $('.sbody').scrollTop : 0, keep = S._keepScroll || S._lastTab === t; S._keepScroll = false; S._lastTab = t;
   root.innerHTML = `<div class="topbar">${t === 'inicio' ? `<div class="wordmark"><span class="rlmark"></span><span>rosita</span></div>` : `<div class="ttl">${title}</div>`}<div class="sp"></div>${pend ? `<button class="tbi" data-tab="equipo">${ico('heart')}<i>${pend}</i></button>` : ''}</div>
   <div class="body sbody">${body}</div>
   <nav class="bnav"><button data-tab="inicio" class="${t === 'inicio' ? 'on' : ''}">${ico('home')}</button><button data-tab="equipo" class="${t === 'equipo' ? 'on' : ''}">${ico('users')}${pend ? `<i>${pend}</i>` : ''}</button>
@@ -577,7 +639,7 @@ async function tryPin() {
   catch (e) { S.err = e.code === 'auth/too-many-requests' ? 'Demasiados intentos. Espera unos minutos.' : 'PIN incorrecto'; S.pinbuf = ''; render(); const d = $('#dots'); d && d.classList.add('shake'); }
 }
 async function doMark(type) {
-  const u = S.me, hor = myHor(), np = nowParts(), st = S.stores[u.store] || {};
+  const u = S.me, np = nowParts(), hor = horDe(u, np.day), st = S.stores[u.store] || {};
   const free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role);
   S.busy = true; render();
   const g = await geo();
@@ -603,7 +665,8 @@ async function doMark(type) {
 function readUserForm() {
   const v = id => $('#' + id) ? $('#' + id).value : '';
   const b = v('u_b');
-  return { n: v('u_n').trim(), puesto: v('u_p').trim(), role: v('u_r'), dept: v('u_d'), store: v('u_s'), horario: v('u_h'), descanso: Number(v('u_ds')), cumple: b ? b.slice(5) : null, pin: v('u_pin') };
+  const medios = [...document.querySelectorAll('#u_md input:checked')].map(x => +x.value).sort();
+  return { n: v('u_n').trim(), puesto: v('u_p').trim(), role: v('u_r'), dept: v('u_d'), store: v('u_s'), horario: v('u_h'), descanso: Number(v('u_ds')), cumple: b ? b.slice(5) : null, pin: v('u_pin'), medios, medioT: v('u_mt') || 'am', medioH: v('u_mh') || null };
 }
 async function createAuthUser(email, pin) {
   const sec = initializeApp(firebaseConfig, 'creator-' + Date.now()), a2 = getAuth(sec);
@@ -618,7 +681,9 @@ async function saveUser() {
   if (!sh.id && !/^\d{4}$/.test(f.pin)) { sh.err = 'El PIN debe tener 4 números'; return render(); }
   S.busy = true; sh.err = null; render();
   try {
-    const data = { n: f.n, puesto: f.puesto || ROLES[f.role].l, role: f.role, dept: f.dept, store: f.store, horario: f.horario, descanso: f.descanso, cumple: f.cumple };
+    const data = { n: f.n, puesto: f.puesto || ROLES[f.role].l, role: f.role, dept: f.dept, store: f.store, horario: f.horario, descanso: f.descanso, cumple: f.cumple, medios: f.medios, medioT: f.medioT, medioH: f.medioH };
+    const hh = S.horarios[f.horario];
+    if (f.medioH && hh && (toMin(f.medioH) <= toMin(hh.ini) || toMin(f.medioH) >= toMin(hh.fin))) { S.busy = false; sh.err = `La hora de corte debe estar entre ${hh.ini} y ${hh.fin}`; return render(); }
     if (!sh.id) {
       let sid = slug(f.n) || 'persona'; if (S.staff[sid]) sid += '-' + Math.random().toString(36).slice(2, 5);
       const email = `${sid}-1@${LOGIN_DOMAIN}`, uid = await createAuthUser(email, f.pin), b = writeBatch(db);
@@ -748,7 +813,11 @@ document.addEventListener('click', async e => {
   if (d.cnew !== undefined) { S.sheet = { kind: 'cambio' }; render(); return; }
   if (d.cnew2 !== undefined) { S.sheet = { kind: 'cambio', other: true }; render(); return; }
   if (d.csave !== undefined) return saveCambio();
-  if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Cambio aprobado' : 'Cambio rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
+  if (d.pnew !== undefined) { S.sheet = { kind: 'permiso' }; render(); return; }
+  if (d.pnew2 !== undefined) { S.sheet = { kind: 'permiso', other: true }; render(); return; }
+  if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; sh.medio = d.pdur || null; render(); return; }
+  if (d.psave !== undefined) return savePermiso();
+  if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Aprobado' : 'Rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
   // muro
   if (d.crear !== undefined) { S.sheet = { kind: 'crear' }; render(); return; }
   if (d.crear2) { S.sheet = d.crear2 === 'anuncio' ? { kind: 'anuncio', aud: role() === 'encargada' ? S.me.store : 'all' } : d.crear2 === 'foto' ? { kind: 'foto', tag: FTAGS[0], store: S.me.store === 'of' ? 'ut' : S.me.store } : { kind: 'reco', cat: 'atencion' }; render(); return; }
@@ -770,6 +839,12 @@ document.addEventListener('click', async e => {
     if (!sh.to) { sh.err = 'Elige a quién reconocer'; return render(); } if (sh.tx.length < 6) { sh.err = 'Cuenta en una frase qué hizo'; return render(); }
     S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'reco', by: S.me.id, to: sh.to, cat: sh.cat, tx: sh.tx, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast(`👏 Reconociste a ${first(P(sh.to).n)}`); } catch (er) { console.error(er); S.busy = false; sh.err = 'No se pudo publicar'; render(); } return;
   }
+  if (d.rx) { const prev = S.rxOpen; S.rxOpen = prev === d.rx ? null : d.rx; if (prev && prev !== d.rx) repaintPost(prev); repaintPost(d.rx); return; }
+  if (d.rxe) { const id = d.rxp, it = S.posts.find(x => x.id === id); if (!it) return;
+    const cur = rxOf((it.likedBy || {})[S.me.id]), lb = { ...(it.likedBy || {}) }, off = cur === d.rxe;
+    if (off) delete lb[S.me.id]; else lb[S.me.id] = d.rxe; it.likedBy = lb; S.rxOpen = null; repaintPost(id);
+    try { await updateDoc(D('posts', id), { [`likedBy.${S.me.id}`]: off ? deleteField() : d.rxe }); } catch (er) { console.error(er); toast('No se pudo reaccionar. Revisa tu internet.'); }
+    return; }
   if (d.like) { const it = S.posts.find(x => x.id === d.like), on = !(it.likedBy || {})[S.me.id]; const lb = { ...(it.likedBy || {}) }; if (on) lb[S.me.id] = true; else delete lb[S.me.id]; it.likedBy = lb; S._keepScroll = true; render(); try { await updateDoc(D('posts', d.like), { likedBy: lb }); } catch (er) { console.error(er); } return; }
   if (d.clap) { const it = S.posts.find(x => x.id === d.clap); it.claps = (it.claps || 0) + 1; S._keepScroll = true; render(); toast('👏 Aplaudiste'); try { await updateDoc(D('posts', d.clap), { claps: it.claps }); } catch (er) { } return; }
   if (d.pdel) { if (!confirmDel()) return; try { await deleteDoc(D('posts', d.pdel)); toast('Publicación borrada'); } catch (er) { toast('No se pudo borrar'); } return; }
@@ -780,6 +855,12 @@ document.addEventListener('click', async e => {
   if (d.nhide !== undefined) { try { await deleteDoc(D('notes', S.sheet.id)); S.sheet = null; render(); toast('Nota ocultada'); } catch (er) { toast('No se pudo ocultar'); } return; }
   if (d.story) { const a = ((S.today || {}).arr || {})[d.story], p = P(d.story); toast(a ? `${first(p.n)} llegó a las ${a.t} ☀️` : `${first(p.n)} todavía no llega`); return; }
 });
+function repaintPost(id) {
+  const el = document.querySelector(`article[data-post="${id}"]`), it = S.posts.find(x => x.id === id);
+  if (el && it) el.outerHTML = postCard(it);
+}
+// Tocar fuera de la barra de reacciones la cierra
+document.addEventListener('pointerdown', e => { if (S.rxOpen && !e.target.closest('.rxwrap')) { const id = S.rxOpen; S.rxOpen = null; repaintPost(id); } });
 let delArm = 0; function confirmDel() { if (Date.now() - delArm < 3000) return true; delArm = Date.now(); toast('Toca otra vez para borrar'); return false; }
 document.addEventListener('input', e => {
   const t = e.target;
@@ -791,7 +872,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'u_s') { const h = $('#u_h'); if (h) h.value = suggestHor(t.value); }
-  if (t.id === 'c_sid') { S.sheet.sid = t.value; render(); }
+  if (t.id === 'c_sid' || t.id === 'p_sid') { S.sheet.sid = t.value; render(); }
   if (t.dataset && t.dataset.photo !== undefined && t.files[0]) {
     try { const img = await compress(t.files[0], 200, .82); await updateDoc(D('directory', S.me.id), { photo: img }); S.me.photo = img; const d = S.dir.find(x => x.id === S.me.id); if (d) d.photo = img; render(); toast('¡Listo! Tu foto ya se ve en el equipo 📸'); }
     catch (er) { console.error(er); toast('No se pudo subir la foto'); }

@@ -51,7 +51,8 @@ export const COLORS = ['#f400a1', '#7b3fe4', '#11a36b', '#e2711d', '#3a6ff7', '#
 export function worksOn(st, hor, dateStr, cambios) {
   if (!st || !hor) return false;
   const c = (cambios || []).filter(x => x.sid === st.id && x.estado === 'aprobado');
-  if (c.some(x => x.rest === dateStr)) return false;
+  // Un permiso de medio día no quita el día: solo acorta el turno
+  if (c.some(x => x.rest === dateStr && !x.medio)) return false;
   if (c.some(x => x.work === dateStr)) return true;
   const wd = new Date(dateStr + 'T12:00:00').getDay();
   if (!hor.dias.includes(wd)) return false;
@@ -60,9 +61,12 @@ export function worksOn(st, hor, dateStr, cambios) {
 }
 // Motivo por el que hoy no trabaja (para mostrarlo bonito)
 export function restReason(st, hor, dateStr, cambios) {
-  const c = (cambios || []).find(x => x.sid === st.id && x.estado === 'aprobado' && x.rest === dateStr);
-  if (c) return { k: 'cambio', c };
+  const c = (cambios || []).find(x => x.sid === st.id && x.estado === 'aprobado' && x.rest === dateStr && !x.medio);
+  if (c) return { k: c.tipo === 'permiso' ? 'permiso' : 'cambio', c };
   const wd = new Date(dateStr + 'T12:00:00').getDay();
   if (st.descanso != null && Number(st.descanso) === wd) return { k: 'descanso' };
   return { k: 'sinturno' };
 }
+
+// Reacciones del muro (estilo Facebook)
+export const RX = [['❤️', 'Me encanta'], ['👏', 'Aplausos'], ['😂', 'Me divierte'], ['😮', 'Me asombra'], ['🔥', 'Fuego'], ['🙏', 'Gracias']];
