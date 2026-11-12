@@ -232,6 +232,7 @@ function rachaCard() {
 }
 /* ---- Arena D'La Rossa (lo manda el puente de la Arena cada 30 min; sin quetzales) ---- */
 const ARENA_URL = 'https://arenadlarossa.netlify.app/';
+const sup0 = () => isSup();
 const sameN = (a, b) => { a = norm(a).trim(); b = norm(b).trim(); return !!a && !!b && (a === b || a.startsWith(b + ' ') || b.startsWith(a + ' ')); };
 const arenaTienda = sid => { const A = S.arena; if (!A) return null; const n = storeN(sid); return (A.tiendas || []).find(t => sameN(t.n, n)) || null; };
 function arenaYo() {
@@ -431,7 +432,17 @@ function postCard(it) {
     const c = RCATS.find(x => x[0] === it.cat) || RCATS[0], t = dirP(it.to); badge = '<span class="rt reco">👏 Reconocimiento</span>';
     body = `<div class="pimg g-reco"><div class="rav">${av(t)}<span>${c[1]}</span></div><div class="rtt">reconoció a <b>${t.id === u.id ? 'ti' : esc(t.n)}</b></div><div class="rcat">${c[2]}</div><div class="rq">“${esc(it.tx)}”</div></div>`;
   }
-  if (it.kind === 'auto' && it.kind2 === 'tabla') {
+  if (it.kind === 'auto' && it.kind2 === 'noticiero') {
+    badge = '<span class="rt auto">Noticiero</span>';
+    const ns = it.notas || [], lead = ns[0], yo = sup0() ? null : (it.liga || []).find(x => sameN(x.n, u.n)), mt = sup0() ? null : (it.tiendas || []).find(x => sameN(x.n, storeN(u.store)));
+    const tuyo = [yo ? `⭐ Vas <b>#${yo.o}</b> en la Liga con ${yo.p} pts` : '', mt ? `🏪 ${esc(storeN(u.store))} va <b>#${mt.o}</b> con ${mt.c}%` : ''].filter(Boolean);
+    body = `<div class="ptx pcap" style="padding-top:2px">${nl(it.tx || '')}</div><div class="news">
+      <div class="nbar"><span class="live">● EN VIVO</span><b>ROSITA NOTICIAS</b><span class="nd">${esc((it.title || '').split('·')[1] || '')}</span></div>
+      ${lead ? `<div class="nlead"><span>${esc(lead.e)}</span><h3>${esc(lead.h)}</h3><p>${esc(lead.s || '')}</p></div>` : ''}
+      ${ns.slice(1).map(n => `<div class="nitem"><i>${esc(n.e)}</i><div><b>${esc(n.h)}</b><small>${esc(n.s || '')}</small></div></div>`).join('')}
+      ${tuyo.length ? `<div class="ntuyo"><span>📍 Para ti</span>${tuyo.join('<br>')}</div>` : ''}
+      <div class="ntick"><span>⏳ Quedan ${it.quedan} ${it.quedan === 1 ? 'día' : 'días'} para cerrar ${esc(it.mesNombre || 'el mes')}</span><a href="${ARENA_URL}" target="_blank" rel="noopener">Ver tabla completa ›</a></div></div>`;
+  } else if (it.kind === 'auto' && it.kind2 === 'tabla') {
     badge = '<span class="rt auto">Arena</span>';
     const M = ['🥇', '🥈', '🥉'], yo = (it.liga || []).find(x => sameN(x.n, u.n)), myT = storeN(u.store), open = S.ligaOpen === it.id;
     const ts = (it.tiendas || []).map((x, i) => `<div class="trow ${!isSup() && sameN(x.n, myT) ? 'me' : ''}"><span class="tp">${M[i] || i + 1}</span><span class="tn">${esc(x.n)}</span><span class="tb"><i style="width:${Math.min(100, x.c / 1.2)}%"></i></span><b>${x.c}%</b></div>`).join('');
@@ -442,8 +453,10 @@ function postCard(it) {
       ${ls ? `<div class="th">⭐ Liga de Vendedoras</div>${ls}${lg.length > 10 ? `<button class="tmore" data-lmore="${it.id}">${open ? 'Ver menos' : `Ver toda la Liga (${lg.length})`}</button>` : ''}` : ''}
       ${yo && yo.o > 10 && !open ? `<div class="trow me"><span class="tp">${yo.o}</span><span class="tn">Tú</span><b>${yo.p} pts</b></div>` : ''}</div>`;
   } else if (it.kind === 'auto') {
-    badge = '<span class="rt auto">Automático</span>';
-    body = `<div class="pimg g-auto"><span>${esc(it.icon || '🏆')}</span><b>${esc(it.title || '')}</b>${it.tx ? `<div>${nl(it.tx)}</div>` : ''}</div>`;
+    const gan = /^arena-cierre/.test(it.id);
+    badge = `<span class="rt auto">${gan ? 'Noticiero' : 'Última hora'}</span>`;
+    body = `<div class="news"><div class="nbar"><span class="live">${gan ? '🏆 ESPECIAL' : '⚡ ÚLTIMA HORA'}</span><b>ROSITA NOTICIAS</b></div>
+      <div class="nlead"><span>${esc(it.icon || '🏆')}</span><h3>${esc(it.title || '')}</h3>${it.tx ? `<p>${nl(it.tx)}</p>` : ''}</div></div>`;
   }
   if (it.kind === 'foto') { badge = `<span class="rt auto">${esc(it.tag || '📷')}</span>`; body = `<div class="pfoto"><img src="${it.img}" alt="" loading="lazy"></div><div class="pcap" style="padding-top:8px"><b>${esc(first(p.n))}</b> ${nl(it.tx || '')}</div>`; }
   const sub = it.kind === 'foto' ? (it.store === 'fuera' ? `📍 ${esc(it.lugar || 'Otra actividad')}` : `${esc(storeN(it.store))} · ${esc((S.stores[it.store] || {}).city || '')}`) : `${esc(p.puesto || '')}`;
