@@ -153,6 +153,10 @@ function startListeners() {
   S.unsub.push(onSnapshot(query(C('posts'), orderBy('at', 'desc'), limit(40)), s => { S.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
   S.unsub.push(onSnapshot(C('notes'), s => { S.notes = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); rerender(); }));
   S.unsub.push(onSnapshot(D('days', day), s => { S.today = s.exists() ? s.data() : {}; rerender(); }));
+  S.unsub.push(onSnapshot(C('directory'), s => {
+    S.dir = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.active !== false);
+    const me = S.dir.find(x => x.id === S.me.id); if (me && me.photo) S.me.photo = me.photo; rerender();
+  }));
   const yday = addDays(day, -1);
   S.unsub.push(onSnapshot(query(C('marks'), where('sid', '==', S.me.id), where('day', 'in', [yday, day])), s => {
     const all = s.docs.map(d => d.data()).sort((a, b) => tsMs(a.at) - tsMs(b.at));
@@ -279,7 +283,7 @@ function heroCard() {
 function notesRow() {
   const u = S.me, now = Date.now(), alive = n => n && n.tx && n.at && now - tsMs(n.at) < 864e5, live = Object.entries(S.notes).filter(([, n]) => alive(n));
   const mine = alive(S.notes[u.id]) ? S.notes[u.id] : null;
-  const others = live.filter(([sid]) => sid !== u.id).map(([sid]) => P(sid)).filter(Boolean)
+  const others = live.filter(([sid]) => sid !== u.id && P(sid)).map(([sid]) => dirP(sid))
     .sort((a, b) => (b.store === u.store) - (a.store === u.store) || tsMs(S.notes[b.id].at) - tsMs(S.notes[a.id].at));
   const one = (p, me, n) => `<button class="inote ${me ? 'me' : ''} ${n ? '' : 'empty'}" data-note="${p.id}"><div class="nbub"><p>${n ? esc(n.tx) : 'Tu nota…'}${me && !n ? '<b>+</b>' : ''}</p></div><i class="tail"></i>${av(p)}<span>${me ? 'Tu nota' : esc(first(p.n))}</span></button>`;
   return `<div class="notes">${one({ ...u, photo: S.me.photo }, true, mine)}${others.map(p => one(p, false, S.notes[p.id])).join('')}</div>`;
