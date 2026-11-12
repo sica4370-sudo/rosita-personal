@@ -164,6 +164,7 @@ function startListeners() {
     S.dir = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.active !== false);
     const me = S.dir.find(x => x.id === S.me.id); if (me && me.photo) S.me.photo = me.photo; rerender();
   }));
+  S.unsub.push(onSnapshot(D('arena', 'actual'), s => { S.arena = s.exists() ? s.data() : null; rerender(); }, () => { S.arena = null; }));
   const yday = addDays(day, -1);
   S.unsub.push(onSnapshot(query(C('marks'), where('sid', '==', S.me.id), where('day', 'in', [yday, day])), s => {
     const all = s.docs.map(d => d.data()).sort((a, b) => tsMs(a.at) - tsMs(b.at));
@@ -228,6 +229,31 @@ function rachaCard() {
     <small>🛡️ ${m.left} ${m.left === 1 ? 'comodín' : 'comodines'} este mes · cubren hasta ${COMODIN_MAX} min</small><div class="rweek">${fireDots(m.days)}</div></div></div>
     ${sr ? `<div class="rstore">🏪 <b>${esc(storeN(S.me.store))}</b> · ${sr.cur ? `🔥 ${sr.cur} ${sr.cur === 1 ? 'día' : 'días'} con todo el equipo a tiempo` : 'el equipo empieza su racha hoy'}</div>` : ''}
     ${top.length ? `<div class="rtop">${top.map(([id, x], i) => `<span class="${id === S.me.store ? 'me' : ''}">${['🥇', '🥈', '🥉'][i] || '🔥'} ${esc(storeN(id))} <b>${x.cur}</b></span>`).join('')}</div>` : ''}`;
+}
+/* ---- Arena D'La Rossa (lo manda el puente de la Arena cada 30 min; sin quetzales) ---- */
+const ARENA_URL = 'https://arenadlarossa.netlify.app/';
+const sameN = (a, b) => { a = norm(a).trim(); b = norm(b).trim(); return !!a && !!b && (a === b || a.startsWith(b + ' ') || b.startsWith(a + ' ')); };
+const arenaTienda = sid => { const A = S.arena; if (!A) return null; const n = storeN(sid); return (A.tiendas || []).find(t => sameN(t.n, n)) || null; };
+function arenaYo() {
+  const A = S.arena, u = S.me; if (!A || !u) return null;
+  const L = A.liga || [], full = L.filter(x => sameN(x.n, u.n)); if (full.length === 1) return full[0];
+  const f = L.filter(x => norm(first(x.n)) === norm(first(u.n)) && (!x.t || sameN(x.t, storeN(u.store)))); return f.length === 1 ? f[0] : null;
+}
+function arenaCard() {
+  const A = S.arena; if (!A || A.mes !== nowParts().day.slice(0, 7)) return '';
+  const u = S.me, sup = isSup(), t = sup ? null : arenaTienda(u.store), yo = sup ? null : arenaYo(), L = A.liga || [];
+  const sell = ['asesora', 'encargada'].includes(u.role);
+  const bar = c => `<div class="abar"><i style="width:${Math.min(100, c / 1.2)}%"></i><b style="left:${95 / 1.2}%"></b><b style="left:${100 / 1.2}%"></b></div>`;
+  let h = `<div class="acard"><div class="ahead"><span>🏆 Arena · ${esc(A.mesNombre || '')}</span><a href="${ARENA_URL}" target="_blank" rel="noopener">Abrir Arena ›</a></div>`;
+  if (sup && A.global != null) h += `<div class="arow"><b>Toda la empresa</b><span>${A.global}%</span></div>${bar(A.global)}`;
+  if (t && t.c != null) h += `<div class="arow"><b>${esc(storeN(u.store))} · Desafío</b><span>${t.c}% · #${t.o}</span></div>${bar(t.c)}<small>${t.c >= 120 ? '🚀 ¡Superaron la meta!' : t.c >= 100 ? '🎯 ¡Meta cumplida!' : t.c >= 95 ? '🔥 ¡Ya van en 95%! Falta poco para el 100%' : `Faltan ${Math.ceil(95 - t.c)} puntos para el 95%`}</small>`;
+  if (sell && L.length) {
+    if (yo) { const up = L[yo.o - 2]; h += `<div class="aliga">⭐ <b>Vas #${yo.o} en la Liga</b> · ${yo.p} pts${up ? ` · te faltan ${Math.max(1, up.p - yo.p + 1)} pts para el #${yo.o - 1} 🚀` : ' · ¡vas primera! 👑'}</div>`; }
+    else h += `<div class="aliga">⭐ Todavía no sumas puntos en la Liga este mes. ¡Tu primera venta cuenta!</div>`;
+  }
+  if (L.length) h += `<div class="atop">${L.slice(0, 3).map((x, i) => `<span>${['🥇', '🥈', '🥉'][i]} ${esc(first(x.n))}${x.t ? ` <small>${esc(x.t)}</small>` : ''} <b>${x.p}</b></span>`).join('')}</div>`;
+  if (sup) { const ts = (A.tiendas || []).filter(x => x.c != null).slice(0, 3); if (ts.length) h += `<div class="atop">${ts.map((x, i) => `<span>${['🥇', '🥈', '🥉'][i]} ${esc(x.n)} <b>${x.c}%</b></span>`).join('')}</div>`; }
+  return h + `<div class="aago">Actualizado ${A.en ? ago(A.en) : ''}</div></div>`;
 }
 function viewRachas() {
   const r = rachas(); if (!r) return '<div class="empty">Calculando…</div>';
@@ -405,9 +431,14 @@ function postCard(it) {
     const c = RCATS.find(x => x[0] === it.cat) || RCATS[0], t = dirP(it.to); badge = '<span class="rt reco">👏 Reconocimiento</span>';
     body = `<div class="pimg g-reco"><div class="rav">${av(t)}<span>${c[1]}</span></div><div class="rtt">reconoció a <b>${t.id === u.id ? 'ti' : esc(t.n)}</b></div><div class="rcat">${c[2]}</div><div class="rq">“${esc(it.tx)}”</div></div>`;
   }
+  if (it.kind === 'auto') {
+    badge = '<span class="rt auto">Automático</span>';
+    body = `<div class="pimg g-auto"><span>${esc(it.icon || '🏆')}</span><b>${esc(it.title || '')}</b>${it.tx ? `<div>${nl(it.tx)}</div>` : ''}</div>`;
+  }
   if (it.kind === 'foto') { badge = `<span class="rt auto">${esc(it.tag || '📷')}</span>`; body = `<div class="pfoto"><img src="${it.img}" alt="" loading="lazy"></div><div class="pcap" style="padding-top:8px"><b>${esc(first(p.n))}</b> ${nl(it.tx || '')}</div>`; }
   const sub = it.kind === 'foto' ? (it.store === 'fuera' ? `📍 ${esc(it.lugar || 'Otra actividad')}` : `${esc(storeN(it.store))} · ${esc((S.stores[it.store] || {}).city || '')}`) : `${esc(p.puesto || '')}`;
-  return `<article class="post" data-post="${it.id}"><div class="ph2">${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div>${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
+  const head = it.kind === 'auto' ? `<div class="logo"><span class="rlmark"></span></div><div class="pw"><b>Rosita</b><small>${it.src === 'arena' ? "Arena D'La Rossa" : 'Rosita Personal'}</small></div>` : `${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div>`;
+  return `<article class="post" data-post="${it.id}"><div class="ph2">${head}${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
   <div class="pact rxwrap">${open ? `<div class="rxbar">${RX.map(([e, l]) => `<button data-rxe="${e}" data-rxp="${it.id}" class="${mine === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>` : ''}
     <button type="button" data-rx="${it.id}" class="rxbtn ${mine ? 'on' : ''}">${mine ? `<span class="rxe">${mine}</span>${(RX.find(x => x[0] === mine) || [0, 'Reaccionaste'])[1]}` : `${ico('heart')}Reaccionar`}</button></div>
   <div class="pmeta">${n ? `<b class="rxsum"><span>${top.join('')}</span> ${n === 1 && mine ? 'Tú' : mine ? `Tú y ${n - 1} más` : n}</b>` : '<span class="first">Sé la primera en reaccionar</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
@@ -426,7 +457,7 @@ function birthdayCards() {
 }
 function viewInicio() {
   const u = S.me;
-  let h = notesRow() + `<div class="hwrap">${heroCard()}</div>` + rachaCard();
+  let h = notesRow() + `<div class="hwrap">${heroCard()}</div>` + rachaCard() + arenaCard();
   if (!S.me.photo) h += `<label class="phnudge"><span>${ico('camera')}</span><div><b>Agrega tu foto de perfil</b> para que te reconozcan</div><em>Agregar</em><input type="file" accept="image/*" data-photo hidden></label>`;
   h += tiendaHoy();
   h += `<div class="sec"><div class="sech"><b>Novedades</b>${canPost() ? `<button class="pubbtn" data-crear>${ico('plus')} Crear</button>` : ''}</div>
@@ -434,7 +465,7 @@ function viewInicio() {
   h += birthdayCards();
   const items = S.posts.filter(it => {
     if (it.kind === 'anuncio' && it.aud && it.aud !== 'all' && it.aud !== u.store && !isMgr() && it.by !== u.id) return false;
-    if (S.scope === 'tienda') { if (it.kind === 'foto') return it.store === u.store; if (it.kind === 'reco') return (P(it.to) || {}).store === u.store; if (it.kind === 'anuncio') return it.aud === u.store; }
+    if (S.scope === 'tienda') { if (it.kind === 'foto') return it.store === u.store; if (it.kind === 'reco') return (P(it.to) || {}).store === u.store; if (it.kind === 'anuncio') return it.aud === u.store; if (it.kind === 'auto') return !it.tienda || sameN(it.tienda, storeN(u.store)); }
     return true;
   });
   const arr = llegadasCard(); let placed = false;

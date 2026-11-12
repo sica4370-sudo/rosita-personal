@@ -111,3 +111,20 @@ input:not([type=checkbox]):not([type=radio]):not(.codein input),textarea,select,
 .nrxbar button.on{background:#ffe3f3;transform:scale(1.15);box-shadow:0 0 0 2px var(--rosa)}
 .nrxlist{max-height:160px;overflow:auto;margin-bottom:10px}
 .nrxrow{display:flex;align-items:center;gap:10px;padding:5px 0}.nrxrow .av{width:30px;height:30px;font-size:11px}.nrxrow b{flex:1;font-size:13.5px;font-weight:600}.nrxrow span{font-size:20px}
+
+/* Arena */
+.acard{margin:10px 14px 0!important;padding:12px 14px;border-radius:18px;background:#fff;border:1px solid #efe6ea;box-shadow:0 6px 18px -14px rgba(31,20,32,.4)}
+.ahead{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:700;color:#65676b;margin-bottom:6px}
+.ahead a{color:var(--rosa);text-decoration:none}
+.arow{display:flex;justify-content:space-between;font-size:14px;margin-top:6px}.arow span{font-weight:800;color:var(--rosa-dk,#c2007f)}
+.abar{position:relative;height:10px;border-radius:99px;background:#f0eaed;margin:6px 0 4px;overflow:hidden}
+.abar i{position:absolute;inset:0 auto 0 0;border-radius:99px;background:linear-gradient(90deg,#ff7ac6,#f400a1)}
+.abar b{position:absolute;top:0;bottom:0;width:2px;background:#fff}
+.acard small{display:block;font-size:11.5px;color:#65676b}
+.aliga{margin-top:8px;font-size:13px;background:#fff7e6;border-radius:12px;padding:8px 10px}
+.atop{display:flex;gap:6px;overflow-x:auto;margin-top:8px;scrollbar-width:none}
+.atop span{white-space:nowrap;background:#f0f2f5;border-radius:99px;padding:5px 10px;font-size:12px;font-weight:600}
+.atop small{display:inline;color:#8a8a92;font-weight:500}
+.aago{font-size:10.5px;color:#a0a0a8;margin-top:6px;text-align:right}
+.g-auto{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px;padding:22px 18px;background:linear-gradient(150deg,#fff3c4,#ffd6ec 55%,#f9c6ff);color:#2b1630;min-height:200px}
+.g-auto>span{font-size:46px;line-height:1}.g-auto>b{font-size:18px}.g-auto>div{font-size:13.5px;line-height:1.5;white-space:normal}

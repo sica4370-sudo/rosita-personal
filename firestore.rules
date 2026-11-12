@@ -87,6 +87,12 @@ service cloud.firestore {
       allow delete: if isAdmin() || (hasMe() && resource.data.by == me().sid);
     }
 
+    // Resultados de la Arena D'La Rossa (sin quetzales): los escribe solo el puente automático de la Arena
+    match /arena/{id} {
+      allow read: if hasMe();
+      allow write: if false;
+    }
+
     // Notas tipo Instagram (una por persona, duran 24 h)
     match /notes/{sid} {
       allow read: if hasMe();
