@@ -431,7 +431,17 @@ function postCard(it) {
     const c = RCATS.find(x => x[0] === it.cat) || RCATS[0], t = dirP(it.to); badge = '<span class="rt reco">👏 Reconocimiento</span>';
     body = `<div class="pimg g-reco"><div class="rav">${av(t)}<span>${c[1]}</span></div><div class="rtt">reconoció a <b>${t.id === u.id ? 'ti' : esc(t.n)}</b></div><div class="rcat">${c[2]}</div><div class="rq">“${esc(it.tx)}”</div></div>`;
   }
-  if (it.kind === 'auto') {
+  if (it.kind === 'auto' && it.kind2 === 'tabla') {
+    badge = '<span class="rt auto">Arena</span>';
+    const M = ['🥇', '🥈', '🥉'], yo = (it.liga || []).find(x => sameN(x.n, u.n)), myT = storeN(u.store), open = S.ligaOpen === it.id;
+    const ts = (it.tiendas || []).map((x, i) => `<div class="trow ${!isSup() && sameN(x.n, myT) ? 'me' : ''}"><span class="tp">${M[i] || i + 1}</span><span class="tn">${esc(x.n)}</span><span class="tb"><i style="width:${Math.min(100, x.c / 1.2)}%"></i></span><b>${x.c}%</b></div>`).join('');
+    const lg = (it.liga || []), lshow = open ? lg : lg.slice(0, 10);
+    const ls = lshow.map(x => `<div class="trow ${yo && x.n === yo.n ? 'me' : ''}"><span class="tp">${M[x.o - 1] || x.o}</span><span class="tn">${esc(x.n)}${x.t ? `<small>${esc(x.t)}</small>` : ''}</span><b>${x.p} pts</b></div>`).join('');
+    body = `<div class="ptx pcap" style="padding-top:2px">${nl(it.tx || '')}</div><div class="tabla"><div class="tt">${esc(it.title || '')}</div>
+      ${ts ? `<div class="th">🏪 Desafío de Tiendas</div>${ts}` : ''}
+      ${ls ? `<div class="th">⭐ Liga de Vendedoras</div>${ls}${lg.length > 10 ? `<button class="tmore" data-lmore="${it.id}">${open ? 'Ver menos' : `Ver toda la Liga (${lg.length})`}</button>` : ''}` : ''}
+      ${yo && yo.o > 10 && !open ? `<div class="trow me"><span class="tp">${yo.o}</span><span class="tn">Tú</span><b>${yo.p} pts</b></div>` : ''}</div>`;
+  } else if (it.kind === 'auto') {
     badge = '<span class="rt auto">Automático</span>';
     body = `<div class="pimg g-auto"><span>${esc(it.icon || '🏆')}</span><b>${esc(it.title || '')}</b>${it.tx ? `<div>${nl(it.tx)}</div>` : ''}</div>`;
   }
@@ -457,7 +467,7 @@ function birthdayCards() {
 }
 function viewInicio() {
   const u = S.me;
-  let h = notesRow() + `<div class="hwrap">${heroCard()}</div>` + rachaCard() + arenaCard();
+  let h = notesRow() + `<div class="hwrap">${heroCard()}</div>` + rachaCard();
   if (!S.me.photo) h += `<label class="phnudge"><span>${ico('camera')}</span><div><b>Agrega tu foto de perfil</b> para que te reconozcan</div><em>Agregar</em><input type="file" accept="image/*" data-photo hidden></label>`;
   h += tiendaHoy();
   h += `<div class="sec"><div class="sech"><b>Novedades</b>${canPost() ? `<button class="pubbtn" data-crear>${ico('plus')} Crear</button>` : ''}</div>
@@ -1047,6 +1057,7 @@ document.addEventListener('click', async e => {
     if (!sh.to) { sh.err = 'Elige a quién reconocer'; return render(); } if (sh.tx.length < 6) { sh.err = 'Cuenta en una frase qué hizo'; return render(); }
     S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'reco', by: S.me.id, to: sh.to, cat: sh.cat, tx: sh.tx, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast(`👏 Reconociste a ${first(P(sh.to).n)}`); } catch (er) { console.error(er); S.busy = false; sh.err = 'No se pudo publicar'; render(); } return;
   }
+  if (d.lmore) { S.ligaOpen = S.ligaOpen === d.lmore ? null : d.lmore; repaintPost(d.lmore); return; }
   if (d.rx) { const prev = S.rxOpen; S.rxOpen = prev === d.rx ? null : d.rx; if (prev && prev !== d.rx) repaintPost(prev); repaintPost(d.rx); return; }
   if (d.rxe) { const id = d.rxp, it = S.posts.find(x => x.id === id); if (!it) return;
     const cur = rxOf((it.likedBy || {})[S.me.id]), lb = { ...(it.likedBy || {}) }, off = cur === d.rxe;
