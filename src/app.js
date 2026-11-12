@@ -249,7 +249,7 @@ function arenaCard() {
   if (sup && A.global != null) h += `<div class="arow"><b>Toda la empresa</b><span>${A.global}%</span></div>${bar(A.global)}`;
   if (t && t.c != null) h += `<div class="arow"><b>${esc(storeN(u.store))} · Desafío</b><span>${t.c}% · #${t.o}</span></div>${bar(t.c)}<small>${t.c >= 120 ? '🚀 ¡Superaron la meta!' : t.c >= 100 ? '🎯 ¡Meta cumplida!' : t.c >= 95 ? '🔥 ¡Ya van en 95%! Falta poco para el 100%' : `Faltan ${Math.ceil(95 - t.c)} puntos para el 95%`}</small>`;
   if (sell && L.length) {
-    if (yo) { const up = L[yo.o - 2]; h += `<div class="aliga">⭐ <b>Vas #${yo.o} en la Liga</b> · ${yo.p} pts${up ? ` · te faltan ${Math.max(1, up.p - yo.p + 1)} pts para el #${yo.o - 1} 🚀` : ' · ¡vas primera! 👑'}</div>`; }
+    if (yo) { const up = L[yo.o - 2]; h += `<div class="aliga">⭐ <b>Vas #${yo.o} en la Liga</b> · ${yo.p} pts${up ? ` · te faltan ${Math.max(1, up.p - yo.p + 1)} pts para el #${yo.o - 1} 🚀` : ' · ¡vas en primer lugar! 👑'}</div>`; }
     else h += `<div class="aliga">⭐ Todavía no sumas puntos en la Liga este mes. ¡Tu primera venta cuenta!</div>`;
   }
   if (L.length) h += `<div class="atop">${L.slice(0, 3).map((x, i) => `<span>${['🥇', '🥈', '🥉'][i]} ${esc(first(x.n))}${x.t ? ` <small>${esc(x.t)}</small>` : ''} <b>${x.p}</b></span>`).join('')}</div>`;
@@ -315,7 +315,7 @@ function viewLogin() {
       for (const p of ppl) h += `<button class="pf r-${p.role}" data-pick="${p.id}" data-name="${esc(norm(p.n + ' ' + (p.puesto || '')))}"><div class="ring">${av(p)}</div><b>${esc(first(p.n))}</b><small>${esc((ROLES[p.role] || {}).l || '')}</small></button>`;
       h += `</div></div>`;
     }
-    h += `</div><div class="empty" id="whonone" hidden style="text-align:center;padding:24px 0">No encontramos ese nombre.<br>Si eres nueva, pídele tu usuario a Sistemas.</div>`;
+    h += `</div><div class="empty" id="whonone" hidden style="text-align:center;padding:24px 0">No encontramos ese nombre.<br>Si acabas de entrar al equipo, pide tu usuario a Sistemas.</div>`;
   }
   return h + `</div>${firmaFoot()}`;
 }
@@ -464,14 +464,14 @@ function postCard(it) {
   return `<article class="post" data-post="${it.id}"><div class="ph2">${head}${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
   <div class="pact rxwrap">${open ? `<div class="rxbar">${RX.map(([e, l]) => `<button data-rxe="${e}" data-rxp="${it.id}" class="${mine === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>` : ''}
     <button type="button" data-rx="${it.id}" class="rxbtn ${mine ? 'on' : ''}">${mine ? `<span class="rxe">${mine}</span>${(RX.find(x => x[0] === mine) || [0, 'Reaccionaste'])[1]}` : `${ico('heart')}Reaccionar`}</button></div>
-  <div class="pmeta">${n ? `<b class="rxsum"><span>${top.join('')}</span> ${n === 1 && mine ? 'Tú' : mine ? `Tú y ${n - 1} más` : n}</b>` : '<span class="first">Sé la primera en reaccionar</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
+  <div class="pmeta">${n ? `<b class="rxsum"><span>${top.join('')}</span> ${n === 1 && mine ? 'Tú' : mine ? `Tú y ${n - 1} más` : n}</b>` : '<span class="first">Reacciona primero</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
 }
 function llegadasCard() {
   const u = S.me, arr = (S.today || {}).arr || {};
   const ids = Object.keys(arr).filter(id => id !== u.id && (S.scope !== 'tienda' || arr[id].st === u.store));
   if (!ids.length) return '';
   const ppl = ids.map(dirP).sort((a, b) => (arr[b.id].t || '').localeCompare(arr[a.id].t || ''));
-  return `<div class="post arrivals"><div class="stack">${ppl.slice(0, 5).map(p => av(p)).join('')}</div><div style="flex:1;min-width:0"><b>☀️ ${ppl.length} ${ppl.length === 1 ? 'compañera ya llegó' : 'compañeras ya llegaron'}</b><small>${ppl.slice(0, 3).map(p => esc(first(p.n))).join(', ')}${ppl.length > 3 ? ' y ' + (ppl.length - 3) + ' más' : ''}</small></div></div>`;
+  return `<div class="post arrivals"><div class="stack">${ppl.slice(0, 5).map(p => av(p)).join('')}</div><div style="flex:1;min-width:0"><b>☀️ ${ppl.length === 1 ? `${esc(first(ppl[0].n))} ya llegó` : `${ppl.length} del equipo ya llegaron`}</b><small>${ppl.slice(0, 3).map(p => esc(first(p.n))).join(', ')}${ppl.length > 3 ? ' y ' + (ppl.length - 3) + ' más' : ''}</small></div></div>`;
 }
 function birthdayCards() {
   const np = nowParts(), md = np.day.slice(5);
@@ -557,7 +557,7 @@ function viewMiTienda() {
   return `<div style="padding:14px 16px"><div class="h3" style="margin-top:0">${esc(storeN(u.store))} <span>${team.length} personas</span></div>` + team.map(p => {
     const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id];
     return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${(rachas() || { per: {} }).per[p.id] ? ` · 🔥 ${rachas().per[p.id].cur}` : ''}</small></div>${isFlex(p) && !a && !out[p.id] ? '<span class="st p">horario flexible</span>' : !w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
-  }).join('') + `<div class="note">Tus compañeras ven si ya llegaste, nunca tus tardanzas. Eso solo lo ven tus jefes.</div></div>`;
+  }).join('') + `<div class="note">Tu equipo ve si ya llegaste, nunca tus tardanzas. Eso solo lo ven tus jefes.</div></div>`;
 }
 function viewLive() {
   const day = nowParts().day, T = S.today || {}, arr = T.arr || {}, out = T.out || {}, lunch = T.lunch || {};
@@ -596,7 +596,7 @@ function viewPeople() {
   for (const p of all) {
     if (p.store !== cur) { cur = p.store; h += `<div class="gh" style="margin:14px 2px 6px">${esc(storeN(cur))}</div>`; }
     const hor = S.horarios[p.horario];
-    h += `<button class="urow ${p.active === false ? 'off' : ''}" data-uedit="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}${p.active === false ? ' · inactiva' : ''}</b><small>${esc((ROLES[p.role] || {}).l || p.role)} · ${horLbl(hor)} · descansa ${p.descanso >= 0 ? DIAS_C[p.descanso] : '—'}${(p.medios || []).length ? ` · ½ día ${p.medios.map(d => DIAS_C[d]).join(' ')}` : ''}</small></div>${ico('edit')}</button>`;
+    h += `<button class="urow ${p.active === false ? 'off' : ''}" data-uedit="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}${p.active === false ? ' · desactivado' : ''}</b><small>${esc((ROLES[p.role] || {}).l || p.role)} · ${horLbl(hor)} · descansa ${p.descanso >= 0 ? DIAS_C[p.descanso] : '—'}${(p.medios || []).length ? ` · ½ día ${p.medios.map(d => DIAS_C[d]).join(' ')}` : ''}</small></div>${ico('edit')}</button>`;
   }
   return h;
 }
@@ -905,7 +905,7 @@ async function saveUser() {
       await b.commit();
       S.staff[sid] = { id: sid, ...data, active: true, authUid: uid, loginEmail: email, loginN: 1 };
       S.dir.push({ id: sid, n: f.n, puesto: data.puesto, role: f.role, store: f.store, active: true, loginEmail: email });
-      S.busy = false; S.sheet = null; render(); toast(`${first(f.n)} creada · PIN ${f.pin}`);
+      S.busy = false; S.sheet = null; render(); toast(`Usuario de ${first(f.n)} creado · PIN ${f.pin}`);
     } else {
       const cur = S.staff[sh.id], b = writeBatch(db);
       b.update(D('staff', sh.id), data);

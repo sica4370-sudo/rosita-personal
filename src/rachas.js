@@ -12,8 +12,8 @@ export const BADGES = [
   ['r30', '👑', 'Leyenda del mes', '30 días seguidos a tiempo'],
   ['r60', '💎', 'Diamante', '60 días seguidos a tiempo'],
   ['limpia', '🛡️', 'Sin comodines', '10 días seguidos a tiempo sin usar comodín'],
-  ['madruga', '🌅', 'Madrugadora', 'Llega 10 min antes 5 veces'],
-  ['reco', '👏', 'Reconocida', 'Recibe 3 reconocimientos'],
+  ['madruga', '🌅', 'Siempre temprano', 'Llega 10 min antes 5 veces'],
+  ['reco', '👏', 'Estrella del equipo', 'Recibe 3 reconocimientos'],
   ['equipo', '🤝', 'Equipo en llamas', 'Tu tienda logra 7 días seguidos todos a tiempo']
 ];
 
