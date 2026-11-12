@@ -1,0 +1,53 @@
+/* ===== Rosita Personal · ajustes de la app real sobre base.css ===== */
+html,body{height:100%;background:#fff}
+body::before{display:none}
+body{overscroll-behavior-y:none}
+#app.screen{height:100dvh;max-width:560px;margin:0 auto;border-radius:0;display:flex;flex-direction:column;overflow:hidden;background:#fff;position:relative;padding-top:env(safe-area-inset-top)}
+@media (min-width:600px){body{background:#f4f1f2}#app.screen{box-shadow:0 0 0 1px #ece6e9,0 20px 60px -30px rgba(31,20,32,.35)}}
+.body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.bnav{padding-bottom:calc(6px + env(safe-area-inset-bottom))}
+.apphead{padding-top:14px}
+.lbl{display:block;font-size:12.5px;font-weight:600;color:#3a3b3c;margin:8px 0 4px}
+.fin{background:#fff}
+select.fin{appearance:auto}
+.err{color:var(--warn);font-size:13px;font-weight:600;margin:4px 0 10px;text-align:center}
+.pinbox .av.big{width:72px;height:72px;font-size:24px;margin:6px auto 0}
+.recent .av{width:44px;height:44px}
+.rlwm{height:11px;width:auto;display:block}
+.firma .rlwm{height:11px}
+.sheet.about img.r{width:92px;height:93px}
+.sheet-bg{position:fixed;z-index:30;max-width:560px;margin:0 auto}
+.toast{z-index:60}
+/* gestión */
+.gtabs{display:flex;gap:6px;overflow-x:auto;padding:10px 14px;border-bottom:1px solid #efefef;scrollbar-width:none;position:sticky;top:0;background:#fff;z-index:2}
+.gtabs::-webkit-scrollbar{display:none}
+.gtabs button{border:none;background:#f0f2f5;border-radius:99px;padding:8px 14px;font-weight:600;font-size:13.5px;white-space:nowrap;color:#050505;position:relative}
+.gtabs button.on{background:#0c0a0d;color:#fff}
+.gtabs button i{font-style:normal;background:#ff3040;color:#fff;border-radius:99px;padding:0 6px;font-size:11px;margin-left:2px}
+.gbody{padding:14px 16px 24px}
+.kpis2{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:6px}
+.kpis2 div{background:#f7f7f8;border-radius:12px;padding:10px 8px;text-align:center}
+.kpis2 b{display:block;font-size:20px}.kpis2 span{font-size:11px;color:#65676b}
+.kpis2 .w b{color:var(--warn)}
+.lcard{border:1px solid #efefef;border-radius:14px;overflow:hidden}
+.lrow{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid #f4f4f4}
+.lrow:last-child{border-bottom:none}
+.lrow .av{width:34px;height:34px;font-size:12px}
+.lrow b{display:block;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lrow small{font-size:11.5px;color:#737373}
+.urow,.crowc{display:flex;align-items:center;gap:12px;width:100%;border:none;background:#fff;border-bottom:1px solid #f1f1f1;padding:10px 2px;text-align:left;color:#0c0a0d}
+.urow .av,.crowc .av{width:40px;height:40px;font-size:13px}
+.urow>div>b,.crowc>div>b{display:block;font-size:14px;font-weight:600}.crowc small b{font-weight:600}.urow small,.crowc small{display:block;font-size:12px;color:#737373;line-height:1.35}
+.urow svg.i{width:18px;height:18px;color:#a0a0a8}
+.urow.off{opacity:.5}
+.hic{width:40px;height:40px;border-radius:12px;background:#fff0f7;color:var(--rosa);display:grid;place-items:center;flex:none}
+.daypick{display:flex;gap:6px;flex-wrap:wrap}
+.daypick label{cursor:pointer}.daypick input{display:none}
+.daypick span{display:inline-block;padding:8px 10px;border-radius:10px;background:#f0f2f5;font-weight:600;font-size:13px}
+.daypick input:checked+span{background:var(--rosa);color:#fff}
+.chk{display:flex;align-items:center;gap:8px;font-size:14px;margin:8px 0}
+.chk input{width:18px;height:18px;accent-color:var(--rosa)}
+.mate .av{width:34px;height:34px}
+.prof .av{font-size:26px}
+.wide:disabled{opacity:.55}
+.pdots{border:none;background:none;padding:4px}
+.rload{height:100%}

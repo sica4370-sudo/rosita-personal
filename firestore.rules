@@ -1,0 +1,97 @@
+rules_version = '2';
+// Rosita Personal · reglas de seguridad de Firestore
+// Cada persona inicia sesión con su PIN (Firebase Auth). Su rol vive en /uids/{authUid}.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signed()    { return request.auth != null; }
+    function uidDoc()    { return /databases/$(db)/documents/uids/$(request.auth.uid); }
+    function hasMe()     { return signed() && exists(uidDoc()); }
+    function me()        { return get(uidDoc()).data; }
+    function role()      { return me().role; }
+    function isAdmin()   { return hasMe() && role() == 'admin'; }
+    function canUsers()  { return hasMe() && role() in ['admin', 'sistemas']; }
+    function isMgr()     { return hasMe() && role() in ['admin', 'jefe']; }
+    function canPost()   { return hasMe() && role() in ['admin', 'jefe', 'encargada', 'fundador']; }
+    function setupDone() { return exists(/databases/$(db)/documents/meta/setup); }
+    // Solo durante la configuración inicial (antes de que exista meta/setup)
+    function firstRun()  { return signed() && !setupDone(); }
+    function onlyKeys(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    match /meta/setup {
+      allow read: if true;
+      allow create: if firstRun()
+        && getAfter(uidDoc()).data.role == 'admin';
+    }
+
+    // Directorio público para la pantalla de ingreso (nombre, puesto, tienda, foto)
+    match /directory/{sid} {
+      allow read: if true;
+      allow write: if canUsers() || firstRun()
+        || (hasMe() && me().sid == sid && onlyKeys(['photo']));
+    }
+
+    match /staff/{sid} {
+      allow read: if hasMe();
+      allow write: if canUsers() || firstRun();
+    }
+
+    match /uids/{uid} {
+      allow read: if signed() && (request.auth.uid == uid || canUsers());
+      allow write: if canUsers() || (firstRun() && request.auth.uid == uid);
+    }
+
+    match /stores/{id} {
+      allow read: if true;
+      allow write: if isAdmin() || firstRun();
+    }
+
+    match /horarios/{id} {
+      allow read: if hasMe();
+      allow write: if isAdmin() || firstRun();
+    }
+
+    // Marcas: cada quien crea las suyas; gerencia, jefes y encargadas pueden leerlas
+    match /marks/{id} {
+      allow read: if hasMe() && (resource.data.sid == me().sid
+        || role() in ['admin', 'jefe', 'fundador', 'encargada']);
+      allow create: if hasMe() && request.resource.data.sid == me().sid;
+      allow update, delete: if isAdmin();
+    }
+
+    // Resumen del día: cada quien solo puede tocar su propia entrada en los mapas
+    match /days/{day} {
+      allow read: if hasMe();
+      allow create: if hasMe();
+      allow update: if hasMe()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['arr', 'out', 'lunch'])
+        && request.resource.data.get('arr', {}).diff(resource.data.get('arr', {})).affectedKeys().hasOnly([me().sid])
+        && request.resource.data.get('out', {}).diff(resource.data.get('out', {})).affectedKeys().hasOnly([me().sid])
+        && request.resource.data.get('lunch', {}).diff(resource.data.get('lunch', {})).affectedKeys().hasOnly([me().sid]);
+    }
+
+    // Cambios de día de descanso
+    match /cambios/{id} {
+      allow read: if hasMe();
+      allow create: if hasMe() && (request.resource.data.sid == me().sid || isMgr() || role() == 'encargada');
+      allow update: if isMgr();
+      allow delete: if isAdmin();
+    }
+
+    // Muro: anuncios, reconocimientos y fotos
+    match /posts/{id} {
+      allow read: if hasMe();
+      allow create: if canPost() && request.resource.data.by == me().sid
+        && request.resource.data.kind in ['anuncio', 'reco', 'foto'];
+      allow update: if hasMe() && onlyKeys(['likedBy', 'claps']);
+      allow delete: if isAdmin() || (hasMe() && resource.data.by == me().sid);
+    }
+
+    // Notas tipo Instagram (una por persona, duran 24 h)
+    match /notes/{sid} {
+      allow read: if hasMe();
+      allow write: if hasMe() && me().sid == sid;
+      allow delete: if hasMe() && (me().sid == sid || isMgr());
+    }
+  }
+}
