@@ -92,7 +92,8 @@ const myHor = () => S.me && S.horarios[S.me.horario];
 const isFlex = p => !!(p && (S.horarios[p.horario] || {}).flex);
 // ¿Se espera hoy a esta persona? Las de horario flexible solo cuentan si ya llegaron
 const expected = (p, day, arr) => worksOn(p, S.horarios[p.horario], day, S.cambios) && (!isFlex(p) || !!(arr || {})[p.id]);
-const horLbl = h => !h ? 'sin horario' : h.flex ? 'horario flexible' : `${h.ini}–${h.fin}`;
+const fixedIn = h => !!h && (!h.flex || !!h.flexIni);
+const horLbl = h => !h ? 'sin horario' : h.flex ? (h.flexIni ? `entra ${h.ini} · salida libre` : 'horario flexible') : `${h.ini}–${h.fin}`;
 const corte = (p, h) => p.medioH || fmtMin(Math.round((toMin(h.ini) + toMin(h.fin)) / 2 / 30) * 30);
 // Horario real de una persona en una fecha: considera sus días de medio día y los permisos de medio día
 function horDe(p, day) {
@@ -269,8 +270,8 @@ function heroCard() {
     return `<div class="hero h-off"><small>${DIAS[new Date(day + 'T12:00:00').getDay()]}</small><h2>${r.k === 'permiso' ? 'Hoy tienes permiso 📝' : 'Hoy descansas 🌷'}</h2><p>${r.k === 'permiso' ? 'Tu permiso está aprobado. ¡Que te vaya bien!' : r.k === 'cambio' ? `Cambiaste tu descanso: trabajas el ${niceDate(r.c.work)}` : r.k === 'descanso' ? 'Es tu día de descanso' : 'Hoy no tienes turno'}</p>${xbtn}</div>`;
   }
   const ini0 = toMin(hor.ini);
-  if (st === 'fuera' && hor.flex) return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>Horario flexible</h2><p>Marca cuando empieces a trabajar</p>
-      <button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} ${S.busy ? 'Verificando ubicación…' : 'Empezar a trabajar'}</button></div>`;
+  if (st === 'fuera' && hor.flex) { const lt = np.min - toMin(hor.ini); return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>${!hor.flexIni ? 'Horario flexible' : lt > (hor.tol || 5) ? `Vas ${lt} min tarde` : `Tu entrada es a las ${hor.ini}`}</h2><p>${hor.flexIni ? 'Tu salida es libre' : 'Marca cuando empieces a trabajar'}</p>
+      <button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} ${S.busy ? 'Verificando ubicación…' : 'Empezar a trabajar'}</button></div>`; }
   if (st === 'fuera') {
     const late = np.min - ini0, free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role);
     if (np.min >= toMin(hor.fin)) return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>Tu jornada ya terminó</h2><p>Tu horario de hoy: ${hor.ini}–${hor.fin}</p><button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} Marcar</button></div>`;
@@ -284,7 +285,7 @@ function heroCard() {
   }
   if (st === 'salio') return `<div class="hero h-done"><small>Hasta mañana</small><h2>Jornada terminada</h2><p>¡Gracias por tu día, ${esc(first(u.n))}! 🌙${extraMin(S.myMarks, day) ? ` · Extra hoy: ${hmin(extraMin(S.myMarks, day))}` : ''}</p>${xbtn}</div>`;
   const e = S.myMarks.find(x => x.type === 'entrada'), lunchOk = hor.lunch > 0 && !S.myMarks.some(x => x.type === 'almuerzo');
-  return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${hor.flex ? ' · horario flexible' : `${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : ''}`}</p>
+  return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${hor.flex ? `${hor.flexIni && !e.late ? ' · a tiempo ✓' : ''} · salida libre` : `${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : ''}`}</p>
     <div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
 }
 function notesRow() {
@@ -372,8 +373,8 @@ function viewInicio() {
 function viewMarcar() {
   const u = S.me, hor = myHor();
   let h = `<div class="hwrap" style="padding-top:14px">${heroCard()}</div><div style="padding:0 16px">`;
-  h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li style="flex-wrap:wrap"><span class="tm">${m.hm}</span><span style="flex:1">${{ entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida', extra: '🌙 Inició horas extra', extrafin: '✅ Terminó horas extra' }[m.type]}</span>${m.avance && m.avance.trim() ? `<small style="display:block;width:100%;color:#65676b;padding-left:52px">📝 ${esc(m.avance)}</small>` : ''}${m.type === 'extrafin' && m.extraMin != null ? `<span class="fl ok">${hmin(m.extraMin)}</span>` : ''}${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' && !isFlex(u) ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
-  h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor && hor.flex ? `<b>${esc(hor.n)}</b> · horario flexible<br>Sin hora ni días fijos: marca cuando empieces y cuando termines.` : hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}${medioTxt(u) ? `<br>${medioTxt(u)}` : ''}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b>` : 'Sin horario asignado'}</div>`;
+  h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li style="flex-wrap:wrap"><span class="tm">${m.hm}</span><span style="flex:1">${{ entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida', extra: '🌙 Inició horas extra', extrafin: '✅ Terminó horas extra' }[m.type]}</span>${m.avance && m.avance.trim() ? `<small style="display:block;width:100%;color:#65676b;padding-left:52px">📝 ${esc(m.avance)}</small>` : ''}${m.type === 'extrafin' && m.extraMin != null ? `<span class="fl ok">${hmin(m.extraMin)}</span>` : ''}${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' && fixedIn(S.horarios[u.horario]) ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
+  h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor && hor.flex ? `<b>${esc(hor.n)}</b> · horario flexible<br>${hor.flexIni ? `Entrada fija a las <b>${hor.ini}</b> (tolerancia ${hor.tol ?? 5} min). Salida libre y días variados.` : 'Sin hora ni días fijos: marca cuando empieces y cuando termines.'}` : hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}${medioTxt(u) ? `<br>${medioTxt(u)}` : ''}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b>` : 'Sin horario asignado'}</div>`;
   h += misCambios();
   return h + `</div>`;
 }
@@ -447,7 +448,7 @@ function viewLive() {
       if (!w) { const r = restReason(p, hor, day, S.cambios); chip = `<span class="st p">${r.k === 'permiso' ? '📝 permiso' : r.k === 'cambio' ? '🔁 descanso movido' : 'descansa'}</span>`; }
       else if (out[p.id]) chip = `<span class="st b">salió ${out[p.id]}</span>`;
       else if (lunch[p.id] && !lunch[p.id].r) chip = `<span class="st y">almuerzo ${lunch[p.id].o}</span>`;
-      else if (a) chip = `<span class="st ${a.late > 0 ? 'y' : 'g'}">${a.t}${hor && hor.flex ? '' : a.late > 0 ? ` · +${a.late} min` : ' ✓'}${a.far ? ' · 📍fuera' : ''}</span>`;
+      else if (a) chip = `<span class="st ${a.late > 0 ? 'y' : 'g'}">${a.t}${!fixedIn(hor) ? '' : a.late > 0 ? ` · +${a.late} min` : ' ✓'}${a.far ? ' · 📍fuera' : ''}</span>`;
       else if (hor && hor.flex) chip = '<span class="st p">flexible · no ha marcado</span>';
       else chip = miss.includes(p) ? '<span class="st" style="background:var(--warn-bg);color:var(--warn)">sin marcar</span>' : `<span class="st p">entra ${hor ? hor.ini : '—'}</span>`;
       if (xo) chip = `<span class="st b">🌙 extra desde ${xo.hm}</span>`;
@@ -473,7 +474,7 @@ function viewPeople() {
 function viewHorarios() {
   const hs = Object.values(S.horarios).sort((a, b) => a.n.localeCompare(b.n));
   return `<button class="wide" data-hnew style="margin-bottom:12px">＋ Nuevo horario</button><div class="note" style="margin:0 0 12px">Los horarios son plantillas: a cada persona le asignas uno y además su día de descanso. Ajusta estos ejemplos a los horarios reales de cada tienda.</div>` +
-    hs.map(x => { const n = Object.values(S.staff).filter(p => p.horario === x.id).length; return `<button class="urow" data-hedit="${x.id}"><div class="hic">${ico('clock')}</div><div style="flex:1"><b>${esc(x.n)}</b><small>${x.flex ? 'Flexible · sin hora ni días fijos · sin horas extra' : `${x.ini}–${x.fin} · ${x.dias.map(d => DIAS_C[d]).join(' ')}${x.lunch ? ` · almuerzo ${x.lunch} min` : ' · sin almuerzo'}`} · ${n} ${n === 1 ? 'persona' : 'personas'}</small></div>${ico('edit')}</button>`; }).join('');
+    hs.map(x => { const n = Object.values(S.staff).filter(p => p.horario === x.id).length; return `<button class="urow" data-hedit="${x.id}"><div class="hic">${ico('clock')}</div><div style="flex:1"><b>${esc(x.n)}</b><small>${x.flex ? (x.flexIni ? `Flexible · entra ${x.ini} · salida libre · días variados · sin horas extra` : 'Flexible · sin hora ni días fijos · sin horas extra') : `${x.ini}–${x.fin} · ${x.dias.map(d => DIAS_C[d]).join(' ')}${x.lunch ? ` · almuerzo ${x.lunch} min` : ' · sin almuerzo'}`} · ${n} ${n === 1 ? 'persona' : 'personas'}</small></div>${ico('edit')}</button>`; }).join('');
 }
 function viewStores() {
   const st = Object.values(S.stores).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
@@ -591,7 +592,10 @@ function horSheet(sh) {
   return sheetWrap(`<h4>${sh.id ? 'Editar horario' : 'Nuevo horario'}</h4><div class="sub">Plantilla que se asigna a las personas</div>
   <label class="lbl">Nombre</label><input id="h_n" class="fin" value="${esc(x.n)}" placeholder="Ej.: Centro comercial">
   <label class="chk"><input type="checkbox" id="h_flex" ${x.flex ? 'checked' : ''}> Horario flexible</label>
-  <div class="rsmall" style="margin:-4px 0 8px">Para quien trabaja horas y días variados y se le paga por su avance: marca cuando empieza y cuando termina, sin tardanzas ni horas extra.</div>
+  <div class="rsmall" style="margin:-4px 0 8px">Para quien trabaja días variados, sale a hora variable y se le paga por su avance: sin hora de salida ni horas extra.</div>
+  ${x.flex ? `<label class="chk"><input type="checkbox" id="h_fi" ${x.flexIni !== false ? 'checked' : ''}> Tiene hora fija de entrada</label>
+  <div ${x.flexIni !== false ? '' : 'hidden'} style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Entrada</label><input id="h_fii" class="fin" type="time" value="${x.ini}"></div><div style="flex:1"><label class="lbl">Tolerancia (min)</label><input id="h_fit" class="fin" type="number" min="0" value="${x.tol ?? 5}"></div></div>
+  <div class="rsmall" style="margin:4px 0 10px">Se cuentan tardanzas a esa hora. La salida es libre y no hay horas extra.</div>` : ''}
   <div ${x.flex ? 'hidden' : ''}>
   <div style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Entrada</label><input id="h_i" class="fin" type="time" value="${x.ini}"></div><div style="flex:1"><label class="lbl">Salida</label><input id="h_f" class="fin" type="time" value="${x.fin}"></div></div>
   <label class="lbl">Días que se trabaja</label><div class="daypick">${DIAS_C.map((d, i) => `<label><input type="checkbox" value="${i}" ${x.dias.includes(i) ? 'checked' : ''}><span>${d}</span></label>`).join('')}</div>
@@ -718,7 +722,7 @@ async function doMark(type, ok) {
   let gps = { ok: g.ok };
   if (g.ok) { gps = { ok: true, lat: g.lat, lng: g.lng, acc: g.acc }; if (st.lat) { gps.dist = dist(g, st); gps.inside = gps.dist <= (st.radius || 150) + Math.min(g.acc || 0, 100); } }
   if (!free && gps.inside === false) { S.busy = false; render(); toast(`Estás a ${gps.dist >= 1000 ? (gps.dist / 1000).toFixed(1) + ' km' : gps.dist + ' m'} de ${st.n}. Acércate para marcar.`); return; }
-  const late = type === 'entrada' && hor && !hor.flex ? Math.max(0, np.min - toMin(hor.ini) - (hor.tol || 5)) : 0;
+  const late = type === 'entrada' && fixedIn(hor) ? Math.max(0, np.min - toMin(hor.ini) - (hor.tol || 5)) : 0;
   const lateReal = late > 0 ? np.min - toMin(hor.ini) : 0, avance = type === 'salida' && typeof ok === 'string' ? ok.trim().slice(0, 300) : '';
   try {
     const b = writeBatch(db);
@@ -807,8 +811,8 @@ async function toggleActive() {
 }
 async function saveHor() {
   const sh = S.sheet, dias = [...document.querySelectorAll('.daypick input:checked')].map(x => +x.value).sort();
-  const flex = $('#h_flex').checked;
-  const h = { n: $('#h_n').value.trim(), ini: $('#h_i').value, fin: $('#h_f').value, lunch: flex ? 0 : Math.max(0, +$('#h_l').value || 0), tol: Math.max(0, +$('#h_t').value || 0), dias: flex ? [0, 1, 2, 3, 4, 5, 6] : dias, flex };
+  const flex = $('#h_flex').checked, flexIni = flex && !!($('#h_fi') && $('#h_fi').checked);
+  const h = { n: $('#h_n').value.trim(), ini: flexIni ? $('#h_fii').value : $('#h_i').value, fin: flex ? '23:59' : $('#h_f').value, lunch: flex ? 0 : Math.max(0, +$('#h_l').value || 0), tol: Math.max(0, +(flexIni ? $('#h_fit').value : $('#h_t').value) || 0), dias: flex ? [0, 1, 2, 3, 4, 5, 6] : dias, flex, flexIni };
   sh.h = h;
   if (!h.n) { sh.err = 'Ponle un nombre'; return render(); } if (flex) { } else if (!dias.length) { sh.err = 'Elige al menos un día'; return render(); } if (toMin(h.fin) <= toMin(h.ini)) { sh.err = 'La salida debe ser después de la entrada'; return render(); }
   S.busy = true; render();
@@ -1001,7 +1005,7 @@ document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'u_s') { const h = $('#u_h'); if (h) h.value = suggestHor(t.value); }
   if (t.id === 'c_sid' || t.id === 'p_sid') { S.sheet.sid = t.value; render(); }
-  if (t.id === 'h_flex') { const sh = S.sheet; sh.h = { ...(sh.h || { ini: '08:00', fin: '17:00', lunch: 0, dias: [1, 2, 3, 4, 5, 6], tol: 5 }), n: $('#h_n').value, flex: t.checked }; render(); }
+  if (t.id === 'h_flex' || t.id === 'h_fi') { const sh = S.sheet; sh.h = { ...(sh.h || { ini: '08:00', fin: '17:00', lunch: 0, dias: [1, 2, 3, 4, 5, 6], tol: 5 }), n: $('#h_n').value, flex: $('#h_flex').checked, flexIni: $('#h_fi') ? $('#h_fi').checked : true }; render(); }
   if (t.id === 'f_st') { readFoto(); render(); if (t.value === 'fuera') setTimeout(() => { const i = $('#f_lugar'); i && i.focus(); }, 50); }
   if (t.dataset && t.dataset.photo !== undefined && t.files[0]) {
     try { const img = await compress(t.files[0], 200, .82); await updateDoc(D('directory', S.me.id), { photo: img }); S.me.photo = img; const d = S.dir.find(x => x.id === S.me.id); if (d) d.photo = img; render(); toast('¡Listo! Tu foto ya se ve en el equipo 📸'); }
