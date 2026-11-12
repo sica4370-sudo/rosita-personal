@@ -437,7 +437,7 @@ function postCard(it) {
     const ns = it.notas || [], lead = ns[0], yo = sup0() ? null : (it.liga || []).find(x => sameN(x.n, u.n)), mt = sup0() ? null : (it.tiendas || []).find(x => sameN(x.n, storeN(u.store)));
     const tuyo = [yo ? `⭐ Vas <b>#${yo.o}</b> en la Liga con ${yo.p} pts` : '', mt ? `🏪 ${esc(storeN(u.store))} va <b>#${mt.o}</b> con ${mt.c}%` : ''].filter(Boolean);
     body = `<div class="ptx pcap" style="padding-top:2px">${nl(it.tx || '')}</div><div class="news">
-      <div class="nbar"><span class="live">● EN VIVO</span><b>ROSITA NOTICIAS</b><span class="nd">${esc((it.title || '').split('·')[1] || '')}</span></div>
+      <div class="nbar"><span class="live">● EN VIVO</span><b>ROSITA NOTICIAS</b><span class="nd">${it.ed === 'tarde' ? '🌇 Tarde · ' : ''}${esc((it.title || '').split('·').pop() || '')}</span></div>
       ${lead ? `<div class="nlead"><span>${esc(lead.e)}</span><h3>${esc(lead.h)}</h3><p>${esc(lead.s || '')}</p></div>` : ''}
       ${ns.slice(1).map(n => `<div class="nitem"><i>${esc(n.e)}</i><div><b>${esc(n.h)}</b><small>${esc(n.s || '')}</small></div></div>`).join('')}
       ${tuyo.length ? `<div class="ntuyo"><span>📍 Para ti</span>${tuyo.join('<br>')}</div>` : ''}
