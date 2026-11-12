@@ -1,6 +1,7 @@
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, connectAuthEmulator, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, deleteField } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, deleteField, documentId } from 'firebase/firestore';
+import { streak, storeStreak, earned, BADGES, COMODINES_MES, COMODIN_MAX, VENTANA } from './rachas.js';
 import { firebaseConfig, LOGIN_DOMAIN, TZ, VERSION } from './config.js';
 import { ROLES, ROLE_ORDER, DEPTS, DIAS, DIAS_C, MESES, STORES_SEED, HORARIOS_SEED, RCATS, FTAGS, NEMO, COLORS, RX, worksOn, restReason } from './data.js';
 
@@ -169,8 +170,76 @@ function startListeners() {
     S.myMarks = all.filter(m => m.day === day); S.myMarksY = all.filter(m => m.day === yday); rerender();
   }));
   if (canSeeLive()) S.unsub.push(onSnapshot(query(C('marks'), where('day', 'in', [yday, day])), s => { S.liveMarks = s.docs.map(d => d.data()).sort((a, b) => tsMs(a.at) - tsMs(b.at)); rerender(); }));
-  const from = addDays(day, -45);
+  const from = addDays(day, -(VENTANA + 5));
+  loadHist();
   S.unsub.push(onSnapshot(query(C('cambios'), where('rest', '>=', from)), s => { S.cambios = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
+}
+// Historial de llegadas para las rachas (una sola lectura al entrar; hoy llega en vivo)
+async function loadHist() {
+  try {
+    const from = addDays(nowParts().day, -VENTANA), s = await getDocs(query(C('days'), where(documentId(), '>=', from)));
+    S.hist = Object.fromEntries(s.docs.map(d => [d.id, (d.data() || {}).arr || {}]));
+    S.histStart = s.docs.map(d => d.id).sort()[0] || nowParts().day;
+    RK = null; rerender(); setTimeout(checkBadges, 300);
+  } catch (e) { console.error(e); }
+}
+/* ---- Rachas (se recalculan una vez por cada redibujo) ---- */
+let RK = null;
+const rkey = () => `${S.histStart}|${nowParts().day}|${JSON.stringify((S.today || {}).arr || {})}|${S.cambios.length}|${Object.keys(S.staff).length}|${S.posts.length}`;
+const dayCreated = p => p.createdAt && p.createdAt.toDate ? new Date(p.createdAt.toDate().getTime() - 6 * 3600e3).toISOString().slice(0, 10) : '';
+const inRacha = p => !!p && p.active !== false && !isSup(p) && !!S.horarios[p.horario] && fixedIn(S.horarios[p.horario]);
+function rachas() {
+  if (!S.hist) return null;
+  const k = rkey(); if (RK && RK.k === k) return RK;
+  const today = nowParts().day, arrOf = d => d === today ? ((S.today || {}).arr || {}) : (S.hist[d] || {});
+  const per = {};
+  Object.values(S.staff).filter(inRacha).forEach(p => {
+    const h = S.horarios[p.horario], cd = dayCreated(p);
+    per[p.id] = streak({ sid: p.id, today, start: cd > S.histStart ? cd : S.histStart, arrOf, expected: d => worksOn(p, h, d, S.cambios), iniOf: d => (horDe(p, d) || {}).ini, flexOnlyIfCame: !!h.flex });
+  });
+  const stores = {};
+  Object.keys(S.stores).forEach(id => { const rs = Object.values(S.staff).filter(p => p.store === id && per[p.id]).map(p => per[p.id]); if (rs.length) stores[id] = { ...storeStreak(rs, today), n: rs.length }; });
+  RK = { k, per, stores }; return RK;
+}
+const myRacha = () => { const r = rachas(); return r && r.per[S.me.id]; };
+function badgesFor(sid) {
+  const r = rachas(), p = S.staff[sid]; if (!p) return new Set();
+  const e = r ? earned(r.per[sid], { recos: S.posts.filter(x => x.kind === 'reco' && x.to === sid).length, storeBest: ((r.stores || {})[p.store] || {}).best || 0 }) : new Set();
+  Object.keys((S.notes[sid] || {}).ins || {}).forEach(x => e.add(x));
+  return e;
+}
+// Guarda las insignias nuevas de la persona y se las celebra
+async function checkBadges() {
+  if (!S.me || isSup() || !S.hist || S.sheet) return;
+  const have = (S.notes[S.me.id] || {}).ins || {}, now = badgesFor(S.me.id), nue = [...now].filter(x => !have[x] && !(S._insSent || {})[x]);
+  if (!nue.length) return;
+  S._insSent = { ...(S._insSent || {}), ...Object.fromEntries(nue.map(x => [x, 1])) };
+  const day = nowParts().day;
+  try { await setDoc(D('notes', S.me.id), { ins: Object.fromEntries(nue.map(x => [x, day])) }, { merge: true }); } catch (e) { console.error(e); return; }
+  S.sheet = { kind: 'insignia', keys: nue }; render();
+}
+const fireDots = days => days.slice(-7).map(x => { const wd = DIAS_C[new Date(x.d + 'T12:00:00').getDay()][0]; const ic = { ok: '🔥', com: '🛡️', late: '✕', miss: '✕', off: '·', pend: '' }[x.s]; return `<div class="rd ${x.s}"><i>${ic}</i><span>${wd}</span></div>`; }).join('');
+function rachaCard() {
+  if (isSup() || !inRacha(S.me)) return '';
+  const r = rachas(); if (!r) return `<div class="rcard"><div class="rfire">🔥<b>…</b></div><div class="rtx"><b>Calculando tu racha…</b></div></div>`;
+  const m = r.per[S.me.id], sr = r.stores[S.me.store];
+  const top = Object.entries(r.stores).filter(([, x]) => x.cur > 0).sort((a, b) => b[1].cur - a[1].cur).slice(0, 6);
+  return `<div class="rcard" data-tab="perfil"><div class="rfire ${m.cur ? 'on' : ''}">🔥<b>${m.cur}</b></div><div class="rtx"><b>${m.cur ? `${m.cur} ${m.cur === 1 ? 'día' : 'días'} de racha` : 'Empieza tu racha hoy'}</b>
+    <small>🛡️ ${m.left} ${m.left === 1 ? 'comodín' : 'comodines'} este mes · cubren hasta ${COMODIN_MAX} min</small><div class="rweek">${fireDots(m.days)}</div></div></div>
+    ${sr ? `<div class="rstore">🏪 <b>${esc(storeN(S.me.store))}</b> · ${sr.cur ? `🔥 ${sr.cur} ${sr.cur === 1 ? 'día' : 'días'} con todo el equipo a tiempo` : 'el equipo empieza su racha hoy'}</div>` : ''}
+    ${top.length ? `<div class="rtop">${top.map(([id, x], i) => `<span class="${id === S.me.store ? 'me' : ''}">${['🥇', '🥈', '🥉'][i] || '🔥'} ${esc(storeN(id))} <b>${x.cur}</b></span>`).join('')}</div>` : ''}`;
+}
+function viewRachas() {
+  const r = rachas(); if (!r) return '<div class="empty">Calculando…</div>';
+  const ppl = Object.values(S.staff).filter(p => r.per[p.id]).sort((a, b) => r.per[b.id].cur - r.per[a.id].cur || r.per[b.id].best - r.per[a.id].best);
+  const st = Object.entries(r.stores).sort((a, b) => b[1].cur - a[1].cur || b[1].best - a[1].best);
+  return `<div class="note" style="margin:0 0 12px">La racha cuenta los días seguidos en que la persona llega a tiempo. Cada quien tiene <b>${COMODINES_MES} comodines al mes</b> que cubren una tardanza de hasta ${COMODIN_MAX} min. Descansos y permisos no la rompen. Gerencia, fundadores y horarios sin hora de entrada no cuentan.</div>
+  <div class="h3" style="margin-top:0">Tiendas <span>todo el equipo a tiempo</span></div><div class="lcard">${st.map(([id, x], i) => `<div class="lrow"><div class="hic">${['🥇', '🥈', '🥉'][i] || '🏪'}</div><div style="flex:1"><b>${esc(storeN(id))}</b><small>${x.n} ${x.n === 1 ? 'persona' : 'personas'} · mejor: ${x.best}</small></div><span class="st ${x.cur ? 'y' : 'p'}">🔥 ${x.cur}</span></div>`).join('')}</div>
+  <div class="h3">Personas</div><div class="lcard">${ppl.map(p => { const m = r.per[p.id], b = badgesFor(p.id); return `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(storeN(p.store))} · mejor: ${m.best} · 🛡️ ${m.left} · ${BADGES.filter(x => b.has(x[0])).map(x => x[1]).join('') || 'sin insignias'}</small></div><span class="st ${m.cur ? 'y' : 'p'}">🔥 ${m.cur}</span></div>`; }).join('')}</div>`;
+}
+function badgeGrid(sid) {
+  const b = badgesFor(sid);
+  return `<div class="h3">Insignias <span>${b.size} de ${BADGES.length}</span></div><div class="bgrid">${BADGES.map(([k, e, n, d]) => `<div class="bdg ${b.has(k) ? 'on' : ''}" title="${esc(d)}"><div>${e}</div><b>${n}</b><small>${d}</small></div>`).join('')}</div>`;
 }
 let rtimer = null;
 function rerender() { if (S.phase !== 'app' || S.sheet) return; clearTimeout(rtimer); rtimer = setTimeout(render, 60); }
@@ -310,6 +379,7 @@ function supCard() {
   const exp = Object.values(S.staff).filter(p => p.active !== false && !isSup(p) && expected(p, day, arr));
   const ok = exp.filter(p => arr[p.id]);
   return `<div class="sec"><div class="sech"><b>D'La Rossa hoy</b><span>${ok.length} de ${exp.length} ya llegaron</span></div>
+    ${(() => { const r = rachas(); if (!r) return ''; const top = Object.entries(r.stores).filter(([, x]) => x.cur > 0).sort((a, b) => b[1].cur - a[1].cur).slice(0, 6); return top.length ? `<div class="rtop" style="margin:0 14px 8px">${top.map(([id, x], i) => `<span>${['🥇', '🥈', '🥉'][i] || '🔥'} ${esc(storeN(id))} <b>${x.cur}</b></span>`).join('')}</div>` : ''; })()}
     <div class="stories">${ok.slice(0, 12).map(p => `<button class="story" data-story="${p.id}"><div class="ring">${av(dirP(p.id))}</div><span>${esc(first(p.n))}</span></button>`).join('') || '<div class="empty">Todavía no llega nadie.</div>'}</div></div>`;
 }
 const bioOf = sid => (S.notes[sid] || {}).bio || '';
@@ -353,7 +423,7 @@ function birthdayCards() {
 }
 function viewInicio() {
   const u = S.me;
-  let h = notesRow() + `<div class="hwrap">${heroCard()}</div>`;
+  let h = notesRow() + `<div class="hwrap">${heroCard()}</div>` + rachaCard();
   if (!S.me.photo) h += `<label class="phnudge"><span>${ico('camera')}</span><div><b>Agrega tu foto de perfil</b> para que te reconozcan</div><em>Agregar</em><input type="file" accept="image/*" data-photo hidden></label>`;
   h += tiendaHoy();
   h += `<div class="sec"><div class="sech"><b>Novedades</b>${canPost() ? `<button class="pubbtn" data-crear>${ico('plus')} Crear</button>` : ''}</div>
@@ -394,10 +464,11 @@ function viewPerfil() {
   const u = S.me, hor = myHor(), recos = S.posts.filter(x => x.kind === 'reco' && x.to === u.id);
   const cnt = {}; recos.forEach(r => cnt[r.cat] = (cnt[r.cat] || 0) + 1);
   return `<div style="padding:0 16px"><div class="prof"><label class="pfedit">${av({ ...u, photo: u.photo })}<span class="cam">${ico('camera')}</span><input type="file" accept="image/*" data-photo hidden></label>
-    <div class="pstats">${isSup() ? `<div><b>${S.posts.filter(x => x.by === u.id).length}</b><span>publica&shy;ciones</span></div><div><b>${S.posts.filter(x => x.kind === 'reco' && x.by === u.id).length}</b><span>reconoci&shy;mientos dados</span></div><div><b>👁️</b><span>supervisión</span></div>` : `<div><b>${recos.length}</b><span>reconoci&shy;mientos</span></div><div><b>${hor ? hor.ini : '—'}</b><span>entrada</span></div><div><b>${u.descanso >= 0 ? DIAS_C[u.descanso] : '—'}</b><span>descanso</span></div>`}</div>
+    <div class="pstats">${isSup() ? `<div><b>${S.posts.filter(x => x.by === u.id).length}</b><span>publica&shy;ciones</span></div><div><b>${S.posts.filter(x => x.kind === 'reco' && x.by === u.id).length}</b><span>reconoci&shy;mientos dados</span></div><div><b>👁️</b><span>supervisión</span></div>` : `<div><b>${recos.length}</b><span>reconoci&shy;mientos</span></div><div><b>🔥 ${(myRacha() || {}).cur ?? '—'}</b><span>racha · mejor ${(myRacha() || {}).best ?? 0}</span></div><div><b>${u.descanso >= 0 ? DIAS_C[u.descanso] : '—'}</b><span>descanso</span></div>`}</div>
     <h3>${esc(u.n)}</h3><p>${esc(u.puesto || '')}${isSup() ? '' : ` · ${esc(storeN(u.store))}`}</p>
     ${bioOf(u.id) ? `<button class="bio" data-bio>“${esc(bioOf(u.id))}”</button>` : `<button class="bio add" data-bio>＋ Agrega una frase</button>`}<label class="chgph">${u.photo ? 'Cambiar foto' : 'Agregar foto de perfil'}<input type="file" accept="image/*" data-photo hidden></label></div>
     ${recos.length ? `<div class="h3">Reconocimientos</div><div class="hl">${Object.entries(cnt).map(([k, n]) => { const c = RCATS.find(x => x[0] === k) || RCATS[0]; return `<div><div class="hlc">${c[1]}${n > 1 ? `<i>${n}</i>` : ''}</div><span>${c[2]}</span></div>`; }).join('')}</div>` : ''}
+    ${isSup() || !inRacha(u) ? '' : badgeGrid(u.id)}
     <div class="h3">Cuenta</div>
     <button class="wide ghost" data-pinchg>Cambiar mi PIN</button>
     <button class="wide ghost" data-logout style="margin-top:8px">Cerrar sesión</button>
@@ -411,6 +482,7 @@ function gestionTabs() {
   if (canUsers()) t.push(['people', 'Personas']);
   if (isAdmin()) t.push(['hor', 'Horarios'], ['stores', 'Tiendas']);
   if (isMgr()) t.push(['camb', 'Descansos']);
+  if (canSeeLive()) t.push(['rachas', 'Rachas 🔥']);
   return t;
 }
 function viewGestion() {
@@ -419,7 +491,7 @@ function viewGestion() {
   if (!S.sub || !tabs.some(t => t[0] === S.sub)) S.sub = tabs[0][0];
   const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)).length;
   let h = `<div class="gtabs">${tabs.map(([k, l]) => `<button data-sub="${k}" class="${S.sub === k ? 'on' : ''}">${l}${k === 'camb' && pend ? ` <i>${pend}</i>` : ''}</button>`).join('')}</div><div class="gbody">`;
-  h += ({ live: viewLive, people: viewPeople, hor: viewHorarios, stores: viewStores, camb: viewCambios })[S.sub]();
+  h += ({ live: viewLive, people: viewPeople, hor: viewHorarios, stores: viewStores, camb: viewCambios, rachas: viewRachas })[S.sub]();
   return h + `</div>`;
 }
 function viewMiTienda() {
@@ -427,7 +499,7 @@ function viewMiTienda() {
   const team = Object.values(S.staff).filter(p => p.active !== false && !isSup(p) && p.store === u.store);
   return `<div style="padding:14px 16px"><div class="h3" style="margin-top:0">${esc(storeN(u.store))} <span>${team.length} personas</span></div>` + team.map(p => {
     const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id];
-    return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}</small></div>${isFlex(p) && !a && !out[p.id] ? '<span class="st p">horario flexible</span>' : !w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
+    return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${(rachas() || { per: {} }).per[p.id] ? ` · 🔥 ${rachas().per[p.id].cur}` : ''}</small></div>${isFlex(p) && !a && !out[p.id] ? '<span class="st p">horario flexible</span>' : !w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
   }).join('') + `<div class="note">Tus compañeras ven si ya llegaste, nunca tus tardanzas. Eso solo lo ven tus jefes.</div></div>`;
 }
 function viewLive() {
@@ -545,6 +617,8 @@ function sheetHtml() {
     <div class="ideas" style="margin:4px 0 12px">${NEMO.map(e => `<button data-nemo="${e}">${e}</button>`).join('')}</div>
     <button class="wide" data-nsave>Compartir nota</button>${n ? '<button class="wide ghost" data-ndel>Borrar mi nota</button>' : '<button class="wide ghost" data-close>Cancelar</button>'}`);
   }
+  if (sh.kind === 'insignia') { const bs = BADGES.filter(x => sh.keys.includes(x[0])); return sheetWrap(`<div style="text-align:center"><div class="bnew">${bs.map(x => x[1]).join(' ')}</div><h4>${bs.length > 1 ? '¡Nuevas insignias!' : '¡Nueva insignia!'}</h4>
+    ${bs.map(x => `<div style="margin:6px 0"><b>${x[2]}</b><div class="sub" style="margin:0">${x[3]}</div></div>`).join('')}<button class="wide" data-close style="margin-top:12px">¡Genial!</button></div>`); }
   if (sh.kind === 'avance') return sheetWrap(`<h4>¿Qué avanzaste hoy?</h4><div class="sub">Opcional · lo ve tu jefe</div>
     <textarea id="av_tx" class="fin" rows="3" maxlength="300" placeholder="Ej.: terminé 12 güipiles, avancé el pedido de Metroplaza"></textarea>
     <button class="wide" data-avok>Marcar salida</button><button class="wide ghost" data-close>Cancelar</button>`);
@@ -736,6 +810,7 @@ async function doMark(type, ok) {
     if (Object.keys(upd).length) b.set(D('days', np.day), upd, { merge: true });
     await b.commit();
     S.busy = false; if (type === 'entrada' || type === 'salida') S.tab = 'inicio'; render();
+    if (type === 'entrada') setTimeout(() => { RK = null; const m = myRacha(); if (m && m.cur > 0 && !lateReal) toast(`🔥 ¡${m.cur} ${m.cur === 1 ? 'día' : 'días'} de racha!`); checkBadges(); }, 2600);
     toast({ extra: `Horas extra desde las ${np.hm} 🌙`, extrafin: `Horas extra terminadas · ${hmin(xmin)}`, entrada: `Entrada registrada ${np.hm}${!g.ok ? ' · sin ubicación' : ''}`, almuerzo: 'Buen provecho 🍽️', regreso: 'Regreso registrado', salida: `Salida registrada ${np.hm} · ¡gracias!` }[type]);
   } catch (e) { console.error(e); S.busy = false; render(); toast('No se pudo registrar. Revisa tu internet.'); }
 }
@@ -840,7 +915,7 @@ async function saveCambio() {
 
 /* ================== EVENTOS ================== */
 document.addEventListener('click', async e => {
-  const t = e.target.closest('button,[data-bgclose]'); if (!t) return;
+  const t = e.target.closest('button,[data-bgclose],.rcard'); if (!t) return;
   if (t.hasAttribute('data-bgclose') && e.target !== t) return;
   const d = t.dataset;
   if (d.bgclose !== undefined || d.close !== undefined) { S.sheet = null; S._keepScroll = true; render(); return; }
@@ -1017,7 +1092,7 @@ document.addEventListener('change', async e => {
 });
 // Al volver a la app (otra hora del día), refresca la vista
 document.addEventListener('visibilitychange', () => { if (!document.hidden) rerender(); });
-setInterval(rerender, 60000);
+setInterval(() => { rerender(); checkBadges(); }, 60000);
 if ('serviceWorker' in navigator && !EMU) navigator.serviceWorker.register('sw.js').catch(() => { });
 window.__S = S;
 boot();

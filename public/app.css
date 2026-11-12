@@ -79,3 +79,26 @@ input:not([type=checkbox]):not([type=radio]):not(.codein input),textarea,select,
 /* Mapa para ubicar tiendas */
 .mapsheet{max-height:96%;overflow:auto}
 #map{height:52vh;min-height:280px;border-radius:14px;overflow:hidden;border:1px solid #eee}
+
+/* Rachas e insignias */
+.rcard{display:flex;gap:12px;align-items:center;margin:10px 14px 0!important;padding:12px 14px;border-radius:18px;background:linear-gradient(135deg,#fff7ec,#ffeef7);border:1px solid #ffe0ea;cursor:pointer}
+.rfire{width:58px;height:58px;border-radius:16px;background:#f0eaed;display:grid;place-items:center;font-size:24px;line-height:1;flex:none;filter:grayscale(1);opacity:.6;text-align:center}
+.rfire b{display:block;font-size:17px;color:#0c0a0d;margin-top:-6px}
+.rfire.on{background:linear-gradient(160deg,#ffb020,#ff5a1f);filter:none;opacity:1;box-shadow:0 8px 18px -8px #ff5a1f}
+.rfire.on b{color:#fff}
+.rtx{flex:1;min-width:0}.rtx>b{display:block;font-size:15px}.rtx small{display:block;font-size:11.5px;color:#65676b;margin:1px 0 6px}
+.rweek{display:flex;gap:5px}
+.rd{display:flex;flex-direction:column;align-items:center;gap:1px}
+.rd i{font-style:normal;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:13px;background:#fff;border:1.5px solid #eee;color:#b0b0b8}
+.rd.ok i{background:#ffefe0;border-color:#ffb020}.rd.com i{background:#eef4ff;border-color:#9cb8ff}
+.rd.late i,.rd.miss i{color:#c0392b;border-color:#f3c7c7;font-weight:700}.rd.pend i{border-style:dashed;border-color:#ffb020}
+.rd span{font-size:10px;color:#8a8a92;font-weight:600}
+.rstore{margin:8px 14px 0!important;font-size:12.5px;color:#3a3b3c}
+.rtop{display:flex;gap:6px;overflow-x:auto;margin:8px 14px 0!important;scrollbar-width:none}
+.rtop span{white-space:nowrap;background:#f0f2f5;border-radius:99px;padding:5px 10px;font-size:12px;font-weight:600}
+.rtop span.me{background:#ffe3f3;color:var(--rosa-dk,#c2007f)}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.bdg{background:#f7f7f8;border-radius:14px;padding:10px 6px;text-align:center;opacity:.5;filter:grayscale(1)}
+.bdg.on{opacity:1;filter:none;background:linear-gradient(160deg,#fff7ec,#ffeef7);border:1px solid #ffe0ea}
+.bdg div{font-size:26px}.bdg b{display:block;font-size:11.5px;margin-top:2px}.bdg small{display:block;font-size:9.5px;color:#737373;line-height:1.25;margin-top:2px}
+.bnew{font-size:54px;margin:6px 0;animation:rxin .4s ease-out}
