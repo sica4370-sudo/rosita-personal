@@ -71,3 +71,11 @@ input:not([type=checkbox]):not([type=radio]):not(.codein input),textarea,select,
 @keyframes rxin{from{opacity:0;transform:translateY(6px) scale(.9)}to{opacity:1;transform:none}}
 .rxsum span{letter-spacing:-2px;margin-right:4px}
 .sbody{overflow-anchor:auto}
+
+/* Frase de perfil */
+.bio{grid-column:1/-1;border:none;background:none;padding:2px 0 8px;font-size:13.5px;color:#3a3b3c;font-style:italic;text-align:left;line-height:1.35}
+.bio.add{font-style:normal;color:var(--rosa);font-weight:600}
+.biov{margin:8px 0 4px;font-style:italic;color:#3a3b3c;font-size:14px}
+/* Mapa para ubicar tiendas */
+.mapsheet{max-height:96%;overflow:auto}
+#map{height:52vh;min-height:280px;border-radius:14px;overflow:hidden;border:1px solid #eee}

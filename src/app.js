@@ -106,6 +106,9 @@ const isAdmin = () => role() === 'admin';
 const isMgr = () => ['admin', 'jefe'].includes(role());
 const canPost = () => ['admin', 'jefe', 'encargada', 'fundador'].includes(role());
 const canUsers = () => ['admin', 'sistemas'].includes(role());
+// Gerencia y fundadores supervisan: no marcan horario ni cuentan en el equipo de ninguna tienda
+const SUP = ['admin', 'fundador'];
+const isSup = (p = S.me) => !!p && SUP.includes(p.role);
 const canSeeLive = () => ['admin', 'jefe', 'fundador'].includes(role());
 
 /* ================== ARRANQUE ================== */
@@ -150,12 +153,17 @@ function startListeners() {
   S.unsub.push(onSnapshot(query(C('posts'), orderBy('at', 'desc'), limit(40)), s => { S.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
   S.unsub.push(onSnapshot(C('notes'), s => { S.notes = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); rerender(); }));
   S.unsub.push(onSnapshot(D('days', day), s => { S.today = s.exists() ? s.data() : {}; rerender(); }));
-  S.unsub.push(onSnapshot(query(C('marks'), where('sid', '==', S.me.id), where('day', '==', day)), s => { S.myMarks = s.docs.map(d => d.data()).sort((a, b) => a.min - b.min); rerender(); }));
+  const yday = addDays(day, -1);
+  S.unsub.push(onSnapshot(query(C('marks'), where('sid', '==', S.me.id), where('day', 'in', [yday, day])), s => {
+    const all = s.docs.map(d => d.data()).sort((a, b) => tsMs(a.at) - tsMs(b.at));
+    S.myMarks = all.filter(m => m.day === day); S.myMarksY = all.filter(m => m.day === yday); rerender();
+  }));
+  if (canSeeLive()) S.unsub.push(onSnapshot(query(C('marks'), where('day', 'in', [yday, day])), s => { S.liveMarks = s.docs.map(d => d.data()).sort((a, b) => tsMs(a.at) - tsMs(b.at)); rerender(); }));
   const from = addDays(day, -45);
   S.unsub.push(onSnapshot(query(C('cambios'), where('rest', '>=', from)), s => { S.cambios = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
 }
 let rtimer = null;
-function rerender() { if (S.phase !== 'app') return; clearTimeout(rtimer); rtimer = setTimeout(render, 60); }
+function rerender() { if (S.phase !== 'app' || S.sheet) return; clearTimeout(rtimer); rtimer = setTimeout(render, 60); }
 
 /* ================== VISTAS: INGRESO ================== */
 const firma = (cls = '') => `<button class="firma ${cls}" data-about>de <img src="rosita.svg" alt=""> <img class="rlwm" src="wordmark.svg" alt="rosita labs"></button>`;
@@ -221,22 +229,40 @@ function todayInfo(st) {
   const day = nowParts().day, hor = horDe(st, day);
   return { day, hor, works: worksOn(st, S.horarios[st.horario], day, S.cambios) };
 }
+const XT = ['extra', 'extrafin'];
+// Horas extra abiertas de una lista de marcas (incluye las que empezaron ayer y siguen de noche)
+function openExtra(marks) { const x = marks.filter(m => XT.includes(m.type)); const l = x[x.length - 1]; return l && l.type === 'extra' ? l : null; }
+// Minutos extra terminados en el día (cada cierre guarda su duración, aunque haya empezado ayer)
+const extraMin = (marks, day) => marks.filter(m => m.type === 'extrafin' && m.day === day).reduce((t, m) => t + (m.extraMin || 0), 0);
+const hmin = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}` : `${m} min`;
 function myState() {
-  const m = S.myMarks; if (!m.length) return 'fuera';
+  if (openExtra([...(S.myMarksY || []), ...S.myMarks])) return 'extra';
+  const m = S.myMarks.filter(x => !XT.includes(x.type)); if (!m.length) return 'fuera';
   const last = m[m.length - 1].type;
   return last === 'salida' ? 'salio' : last === 'almuerzo' ? 'almuerzo' : 'trabajando';
 }
 function heroCard() {
   const u = S.me, { day, hor, works } = todayInfo(u), np = nowParts(), st = myState();
   const hr = np.min < 720 ? 'Buen día' : np.min < 1080 ? 'Buenas tardes' : 'Buenas noches';
+  if (isSup()) {
+    const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)).length;
+    return `<div class="hero h-work"><small>${hr}, ${esc(first(u.n))}</small><h2>Supervisión</h2><p>${esc(u.puesto || (ROLES[u.role] || {}).l)} · no marcas horario${pend ? ` · ${pend} por aprobar` : ''}</p>
+      <div class="hrow"><button class="hbtn2" data-tab="equipo">${ico('users')} Ver En vivo</button><button class="hbtn2" data-crear>${ico('plus')} Publicar</button></div></div>`;
+  }
   if (!hor) return `<div class="hero h-off"><small>${hr}, ${esc(first(u.n))}</small><h2>Sin horario asignado</h2><p>Pídele a Gerencia que te asigne un horario.</p></div>`;
+  if (st === 'extra') {
+    const o = openExtra([...(S.myMarksY || []), ...S.myMarks]), m = (o.day === day ? 0 : 1440) + np.min - o.min;
+    return `<div class="hero h-lunch"><small>🌙 Horas extra</small><h2>${hmin(Math.max(0, m))}</h2><p>Empezaste a las ${o.hm}${o.day !== day ? ' (ayer)' : ''}</p><button class="hbtn" data-mark="extrafin" ${S.busy ? 'disabled' : ''}>${ico('out')} Terminar horas extra</button></div>`;
+  }
+  const xbtn = `<button class="hbtn2" data-mark="extra" style="margin-top:10px">🌙 Voy a trabajar horas extra</button>`;
   if (!works && st === 'fuera') {
     const r = restReason(u, hor, day, S.cambios);
-    return `<div class="hero h-off"><small>${DIAS[new Date(day + 'T12:00:00').getDay()]}</small><h2>${r.k === 'permiso' ? 'Hoy tienes permiso 📝' : 'Hoy descansas 🌷'}</h2><p>${r.k === 'permiso' ? 'Tu permiso está aprobado. ¡Que te vaya bien!' : r.k === 'cambio' ? `Cambiaste tu descanso: trabajas el ${niceDate(r.c.work)}` : r.k === 'descanso' ? 'Es tu día de descanso' : 'Hoy no tienes turno'}</p></div>`;
+    return `<div class="hero h-off"><small>${DIAS[new Date(day + 'T12:00:00').getDay()]}</small><h2>${r.k === 'permiso' ? 'Hoy tienes permiso 📝' : 'Hoy descansas 🌷'}</h2><p>${r.k === 'permiso' ? 'Tu permiso está aprobado. ¡Que te vaya bien!' : r.k === 'cambio' ? `Cambiaste tu descanso: trabajas el ${niceDate(r.c.work)}` : r.k === 'descanso' ? 'Es tu día de descanso' : 'Hoy no tienes turno'}</p>${xbtn}</div>`;
   }
   const ini0 = toMin(hor.ini);
   if (st === 'fuera') {
     const late = np.min - ini0, free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role);
+    if (np.min >= toMin(hor.fin)) return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>Tu jornada ya terminó</h2><p>Tu horario de hoy: ${hor.ini}–${hor.fin}</p><button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} Marcar</button></div>`;
     return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>${late > 120 ? 'No has marcado tu entrada' : late > (hor.tol || 5) ? `Vas ${late} min tarde` : `Tu entrada es a las ${hor.ini}`}</h2>${hor.medio ? `<p>☀️ Hoy trabajas medio día: ${hor.ini}–${hor.fin}</p>` : ''}
       <p>${ico('pin')} ${free ? 'Desde la oficina, una tienda u otro lugar' : esc(storeN(u.store))}</p>
       <button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} ${S.busy ? 'Verificando ubicación…' : 'Marcar entrada'}</button></div>`;
@@ -245,14 +271,14 @@ function heroCard() {
     const o = S.myMarks.filter(x => x.type === 'almuerzo').pop(), m = np.min - o.min;
     return `<div class="hero h-lunch"><small>En almuerzo</small><h2>${m} de ${hor.lunch} min</h2><div class="hbar"><i style="width:${Math.min(100, m / hor.lunch * 100)}%"></i></div><button class="hbtn" data-mark="regreso" ${S.busy ? 'disabled' : ''}>${ico('back')} Regresé</button></div>`;
   }
-  if (st === 'salio') return `<div class="hero h-done"><small>Hasta mañana</small><h2>Jornada terminada</h2><p>¡Gracias por tu día, ${esc(first(u.n))}! 🌙</p></div>`;
+  if (st === 'salio') return `<div class="hero h-done"><small>Hasta mañana</small><h2>Jornada terminada</h2><p>¡Gracias por tu día, ${esc(first(u.n))}! 🌙${extraMin(S.myMarks, day) ? ` · Extra hoy: ${hmin(extraMin(S.myMarks, day))}` : ''}</p>${xbtn}</div>`;
   const e = S.myMarks.find(x => x.type === 'entrada'), lunchOk = hor.lunch > 0 && !S.myMarks.some(x => x.type === 'almuerzo');
   return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : ''}</p>
     <div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
 }
 function notesRow() {
-  const u = S.me, now = Date.now(), live = Object.entries(S.notes).filter(([, n]) => now - tsMs(n.at) < 864e5);
-  const mine = S.notes[u.id] && now - tsMs(S.notes[u.id].at) < 864e5 ? S.notes[u.id] : null;
+  const u = S.me, now = Date.now(), alive = n => n && n.tx && n.at && now - tsMs(n.at) < 864e5, live = Object.entries(S.notes).filter(([, n]) => alive(n));
+  const mine = alive(S.notes[u.id]) ? S.notes[u.id] : null;
   const others = live.filter(([sid]) => sid !== u.id).map(([sid]) => P(sid)).filter(Boolean)
     .sort((a, b) => (b.store === u.store) - (a.store === u.store) || tsMs(S.notes[b.id].at) - tsMs(S.notes[a.id].at));
   const one = (p, me, n) => `<button class="inote ${me ? 'me' : ''} ${n ? '' : 'empty'}" data-note="${p.id}"><div class="nbub"><p>${n ? esc(n.tx) : 'Tu nota…'}${me && !n ? '<b>+</b>' : ''}</p></div><i class="tail"></i>${av(p)}<span>${me ? 'Tu nota' : esc(first(p.n))}</span></button>`;
@@ -260,12 +286,21 @@ function notesRow() {
 }
 function tiendaHoy() {
   const u = S.me, day = nowParts().day, arr = (S.today || {}).arr || {};
-  const team = Object.values(S.staff).filter(p => p.active !== false && p.store === u.store && worksOn(p, S.horarios[p.horario], day, S.cambios));
+  if (isSup()) return supCard();
+  const team = Object.values(S.staff).filter(p => p.active !== false && !isSup(p) && p.store === u.store && worksOn(p, S.horarios[p.horario], day, S.cambios));
   if (!team.find(p => p.id === u.id) && myState() !== 'fuera') team.unshift(u);
   const ok = team.filter(p => arr[p.id]);
   return `<div class="sec"><div class="sech"><b>${esc(storeN(u.store))} hoy</b><span>${ok.length} de ${team.length} ya llegaron</span></div>
     <div class="stories">${team.map(p => `<button class="story ${arr[p.id] ? '' : 'off'}" data-story="${p.id}"><div class="ring">${av(dirP(p.id))}</div><span>${p.id === u.id ? 'Tú' : esc(first(p.n))}</span></button>`).join('') || '<div class="empty">Nadie programado hoy.</div>'}</div></div>`;
 }
+function supCard() {
+  const day = nowParts().day, arr = (S.today || {}).arr || {};
+  const exp = Object.values(S.staff).filter(p => p.active !== false && !isSup(p) && worksOn(p, S.horarios[p.horario], day, S.cambios));
+  const ok = exp.filter(p => arr[p.id]);
+  return `<div class="sec"><div class="sech"><b>D'La Rossa hoy</b><span>${ok.length} de ${exp.length} ya llegaron</span></div>
+    <div class="stories">${ok.slice(0, 12).map(p => `<button class="story" data-story="${p.id}"><div class="ring">${av(dirP(p.id))}</div><span>${esc(first(p.n))}</span></button>`).join('') || '<div class="empty">Todavía no llega nadie.</div>'}</div></div>`;
+}
+const bioOf = sid => (S.notes[sid] || {}).bio || '';
 const dirP = sid => { const s = S.staff[sid] || {}, d = S.dir.find(x => x.id === sid) || {}; return { ...s, ...d, id: sid, n: s.n || d.n }; };
 // Reacciones: likedBy guarda { persona: emoji } (los "me gusta" viejos, guardados como true, cuentan como ❤️)
 const rxOf = v => v === true ? '❤️' : v;
@@ -286,7 +321,7 @@ function postCard(it) {
     body = `<div class="pimg g-reco"><div class="rav">${av(t)}<span>${c[1]}</span></div><div class="rtt">reconoció a <b>${t.id === u.id ? 'ti' : esc(t.n)}</b></div><div class="rcat">${c[2]}</div><div class="rq">“${esc(it.tx)}”</div></div>`;
   }
   if (it.kind === 'foto') { badge = `<span class="rt auto">${esc(it.tag || '📷')}</span>`; body = `<div class="pfoto"><img src="${it.img}" alt="" loading="lazy"></div><div class="pcap" style="padding-top:8px"><b>${esc(first(p.n))}</b> ${nl(it.tx || '')}</div>`; }
-  const sub = it.kind === 'foto' ? `${esc(storeN(it.store))} · ${esc((S.stores[it.store] || {}).city || '')}` : `${esc(p.puesto || '')}`;
+  const sub = it.kind === 'foto' ? (it.store === 'fuera' ? `📍 ${esc(it.lugar || 'Otra actividad')}` : `${esc(storeN(it.store))} · ${esc((S.stores[it.store] || {}).city || '')}`) : `${esc(p.puesto || '')}`;
   return `<article class="post" data-post="${it.id}"><div class="ph2">${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div>${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
   <div class="pact rxwrap">${open ? `<div class="rxbar">${RX.map(([e, l]) => `<button data-rxe="${e}" data-rxp="${it.id}" class="${mine === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>` : ''}
     <button type="button" data-rx="${it.id}" class="rxbtn ${mine ? 'on' : ''}">${mine ? `<span class="rxe">${mine}</span>${(RX.find(x => x[0] === mine) || [0, 'Reaccionaste'])[1]}` : `${ico('heart')}Reaccionar`}</button></div>
@@ -326,7 +361,7 @@ function viewInicio() {
 function viewMarcar() {
   const u = S.me, hor = myHor();
   let h = `<div class="hwrap" style="padding-top:14px">${heroCard()}</div><div style="padding:0 16px">`;
-  h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li><span class="tm">${m.hm}</span><span style="flex:1">${{ entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida' }[m.type]}</span>${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
+  h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li><span class="tm">${m.hm}</span><span style="flex:1">${{ entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida', extra: '🌙 Inició horas extra', extrafin: '✅ Terminó horas extra' }[m.type]}</span>${m.type === 'extrafin' && m.extraMin != null ? `<span class="fl ok">${hmin(m.extraMin)}</span>` : ''}${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
   h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}${medioTxt(u) ? `<br>${medioTxt(u)}` : ''}` : 'Sin horario asignado'}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b></div>`;
   h += misCambios();
   return h + `</div>`;
@@ -347,8 +382,9 @@ function viewPerfil() {
   const u = S.me, hor = myHor(), recos = S.posts.filter(x => x.kind === 'reco' && x.to === u.id);
   const cnt = {}; recos.forEach(r => cnt[r.cat] = (cnt[r.cat] || 0) + 1);
   return `<div style="padding:0 16px"><div class="prof"><label class="pfedit">${av({ ...u, photo: u.photo })}<span class="cam">${ico('camera')}</span><input type="file" accept="image/*" data-photo hidden></label>
-    <div class="pstats"><div><b>${recos.length}</b><span>reconoci&shy;mientos</span></div><div><b>${hor ? hor.ini : '—'}</b><span>entrada</span></div><div><b>${u.descanso >= 0 ? DIAS_C[u.descanso] : '—'}</b><span>descanso</span></div></div>
-    <h3>${esc(u.n)}</h3><p>${esc(u.puesto || '')} · ${esc(storeN(u.store))}</p><label class="chgph">${u.photo ? 'Cambiar foto' : 'Agregar foto de perfil'}<input type="file" accept="image/*" data-photo hidden></label></div>
+    <div class="pstats">${isSup() ? `<div><b>${S.posts.filter(x => x.by === u.id).length}</b><span>publica&shy;ciones</span></div><div><b>${S.posts.filter(x => x.kind === 'reco' && x.by === u.id).length}</b><span>reconoci&shy;mientos dados</span></div><div><b>👁️</b><span>supervisión</span></div>` : `<div><b>${recos.length}</b><span>reconoci&shy;mientos</span></div><div><b>${hor ? hor.ini : '—'}</b><span>entrada</span></div><div><b>${u.descanso >= 0 ? DIAS_C[u.descanso] : '—'}</b><span>descanso</span></div>`}</div>
+    <h3>${esc(u.n)}</h3><p>${esc(u.puesto || '')}${isSup() ? '' : ` · ${esc(storeN(u.store))}`}</p>
+    ${bioOf(u.id) ? `<button class="bio" data-bio>“${esc(bioOf(u.id))}”</button>` : `<button class="bio add" data-bio>＋ Agrega una frase</button>`}<label class="chgph">${u.photo ? 'Cambiar foto' : 'Agregar foto de perfil'}<input type="file" accept="image/*" data-photo hidden></label></div>
     ${recos.length ? `<div class="h3">Reconocimientos</div><div class="hl">${Object.entries(cnt).map(([k, n]) => { const c = RCATS.find(x => x[0] === k) || RCATS[0]; return `<div><div class="hlc">${c[1]}${n > 1 ? `<i>${n}</i>` : ''}</div><span>${c[2]}</span></div>`; }).join('')}</div>` : ''}
     <div class="h3">Cuenta</div>
     <button class="wide ghost" data-pinchg>Cambiar mi PIN</button>
@@ -376,7 +412,7 @@ function viewGestion() {
 }
 function viewMiTienda() {
   const u = S.me, day = nowParts().day, arr = (S.today || {}).arr || {}, out = (S.today || {}).out || {};
-  const team = Object.values(S.staff).filter(p => p.active !== false && p.store === u.store);
+  const team = Object.values(S.staff).filter(p => p.active !== false && !isSup(p) && p.store === u.store);
   return `<div style="padding:14px 16px"><div class="h3" style="margin-top:0">${esc(storeN(u.store))} <span>${team.length} personas</span></div>` + team.map(p => {
     const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id];
     return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}</small></div>${!w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
@@ -395,13 +431,15 @@ function viewLive() {
     h += `<div class="h3">${esc(st.n)} <span>${team.filter(p => arr[p.id]).length}/${team.filter(p => worksOn(p, S.horarios[p.horario], day, S.cambios)).length}</span></div><div class="lcard">`;
     for (const p of team) {
       const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id], hor = horDe(p, day);
+      const pm = (S.liveMarks || []).filter(m => m.sid === p.id), xo = openExtra(pm), xm = extraMin(pm, day);
       let chip;
       if (!w) { const r = restReason(p, hor, day, S.cambios); chip = `<span class="st p">${r.k === 'permiso' ? '📝 permiso' : r.k === 'cambio' ? '🔁 descanso movido' : 'descansa'}</span>`; }
       else if (out[p.id]) chip = `<span class="st b">salió ${out[p.id]}</span>`;
       else if (lunch[p.id] && !lunch[p.id].r) chip = `<span class="st y">almuerzo ${lunch[p.id].o}</span>`;
       else if (a) chip = `<span class="st ${a.late > 0 ? 'y' : 'g'}">${a.t}${a.late > 0 ? ` · +${a.late} min` : ' ✓'}${a.far ? ' · 📍fuera' : ''}</span>`;
       else chip = miss.includes(p) ? '<span class="st" style="background:var(--warn-bg);color:var(--warn)">sin marcar</span>' : `<span class="st p">entra ${hor ? hor.ini : '—'}</span>`;
-      h += `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${w && hor && hor.medio ? ` · ½ día ${hor.ini}–${hor.fin}${hor.why === 'permiso' ? ' (permiso)' : ''}` : ''}</small></div>${chip}</div>`;
+      if (xo) chip = `<span class="st b">🌙 extra desde ${xo.hm}</span>`;
+      h += `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${w && hor && hor.medio ? ` · ½ día ${hor.ini}–${hor.fin}${hor.why === 'permiso' ? ' (permiso)' : ''}` : ''}${!xo && xm ? ` · 🌙 extra ${hmin(xm)}` : ''}</small></div>${chip}</div>`;
     }
     h += `</div>`;
   }
@@ -452,6 +490,10 @@ function sheetHtml() {
   if (sh.kind === 'user') return userSheet(sh);
   if (sh.kind === 'hor') return horSheet(sh);
   if (sh.kind === 'store') return storeSheet(sh);
+  if (sh.kind === 'mapa') return `<div class="sheet-bg"><div class="sheet mapsheet"><h4>📍 ${esc(sh.back.s.n || 'Tienda')}</h4><div class="sub">Toca el mapa o arrastra el pin hasta la tienda</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px"><input id="m_q" class="fin" style="flex:1;margin:0" placeholder="Buscar lugar. Ej.: Utz Ulew Quetzaltenango"><button class="wide ghost" data-mq style="margin:0;width:auto;padding:0 14px">${ico('search')}</button></div>
+    <div id="map"></div><div class="rsmall" id="m_ll" style="margin:6px 0">${sh.lat ? `${sh.lat.toFixed(5)}, ${sh.lng.toFixed(5)}` : 'Sin punto elegido'}</div>
+    <div style="display:flex;gap:8px"><button class="wide ghost" data-mcancel style="margin:0;flex:1">Cancelar</button><button class="wide" data-mok style="margin:0;flex:2">Usar esta ubicación</button></div></div></div>`;
   if (sh.kind === 'cambio') return cambioSheet(sh);
   if (sh.kind === 'permiso') return permisoSheet(sh);
   if (sh.kind === 'pin') return sheetWrap(`<h4>Cambiar mi PIN</h4><div class="sub">Necesitas tu PIN actual</div>
@@ -467,10 +509,12 @@ function sheetHtml() {
     ${enc ? '' : `<select id="a_aud" class="fin">${opt('all', 'Toda la empresa', sh.aud)}${Object.values(S.stores).map(s => opt(s.id, 'Solo ' + s.n, sh.aud)).join('')}</select>`}
     <textarea id="a_tx" class="fin" rows="4" placeholder="Ej.: Mañana inventario general a las 7:00">${esc(sh.tx || '')}</textarea>${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-apub ${S.busy ? 'disabled' : ''}>Publicar</button><button class="wide ghost" data-close>Cancelar</button>`);
   }
-  if (sh.kind === 'foto') return sheetWrap(`<h4>Nueva foto</h4><div class="sub">${esc(storeN(sh.store || S.me.store))} · la ve todo D'La Rossa</div>
+  if (sh.kind === 'foto') return sheetWrap(`<h4>Nueva foto</h4><div class="sub">La ve todo D'La Rossa</div>
     <label class="fpick">${sh.img ? `<img src="${sh.img}">` : `<span>${ico('camera')}</span><b>Tomar o elegir foto</b><small>Vitrina, producto, la tienda lista</small>`}<input type="file" accept="image/*" data-fotoimg hidden></label>
-    ${!['encargada'].includes(role()) ? `<select id="f_st" class="fin" style="margin-top:10px">${Object.values(S.stores).filter(s => s.id !== 'of').map(s => opt(s.id, s.n, sh.store || S.me.store)).join('')}</select>` : ''}
-    <div class="ideas" style="margin:10px 0">${FTAGS.map(t => `<button data-ftag="${t}" class="${sh.tag === t ? 'on' : ''}">${t}</button>`).join('')}</div>
+    <label class="lbl" style="margin-top:10px">¿Dónde fue?</label><select id="f_st" class="fin">${Object.values(S.stores).filter(s => role() !== 'encargada' || s.id === S.me.store).sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).map(s => opt(s.id, s.n, sh.store || S.me.store)).join('')}${opt('fuera', '📍 En otra actividad / fuera', sh.store)}</select>
+    ${sh.store === 'fuera' ? `<input id="f_lugar" class="fin" value="${esc(sh.lugar || '')}" placeholder="¿Dónde? Ej.: Feria de Xela, apoyo a Mercadeo">` : ''}
+    <div class="ideas" style="margin:10px 0">${FTAGS.map(t => `<button data-ftag="${t}" class="${sh.tag === t ? 'on' : ''}">${t}</button>`).join('')}<button data-ftag="otro" class="${sh.tag === 'otro' ? 'on' : ''}">✏️ Otro</button></div>
+    ${sh.tag === 'otro' ? `<input id="f_tagx" class="fin" maxlength="24" value="${esc(sh.tagx || '')}" placeholder="Escribe la etiqueta. Ej.: Capacitación">` : ''}
     <textarea id="f_cap" class="fin" rows="2" placeholder="Escribe una descripción…">${esc(sh.cap || '')}</textarea>${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-fpub ${S.busy ? 'disabled' : ''}>Compartir</button><button class="wide ghost" data-close>Cancelar</button>`);
   if (sh.kind === 'reco') {
     const pool = Object.values(S.staff).filter(p => p.active !== false && p.id !== S.me.id && (role() !== 'encargada' || p.store === S.me.store));
@@ -480,16 +524,21 @@ function sheetHtml() {
     <textarea id="r_tx" class="fin" rows="2" placeholder="Cuenta qué hizo">${esc(sh.tx || '')}</textarea>${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-rpub ${S.busy ? 'disabled' : ''}>👏 Publicar reconocimiento</button><button class="wide ghost" data-close>Cancelar</button>`);
   }
   if (sh.kind === 'nota') {
-    const n = S.notes[S.me.id], v = sh.tx ?? (n && Date.now() - tsMs(n.at) < 864e5 ? n.tx : '');
+    const n0 = S.notes[S.me.id], n = n0 && n0.tx ? n0 : null, v = sh.tx ?? (n && Date.now() - tsMs(n.at) < 864e5 ? n.tx : '');
     return sheetWrap(`<h4>Tu nota</h4><div class="sub">La ve todo D'La Rossa durante 24 horas. Máximo 60 letras.</div>
     <div class="npreview"><div class="nbub big"><p id="nprev">${v ? esc(v) : '¿Qué está pasando?'}</p></div>${av(S.me)}</div>
     <div style="position:relative"><input id="n_tx" maxlength="60" class="fin" value="${esc(v)}" placeholder="Comparte algo corto con el equipo" autocomplete="off" style="padding-right:52px"><span id="ncount" class="ncount">${v.length}/60</span></div>
     <div class="ideas" style="margin:4px 0 12px">${NEMO.map(e => `<button data-nemo="${e}">${e}</button>`).join('')}</div>
     <button class="wide" data-nsave>Compartir nota</button>${n ? '<button class="wide ghost" data-ndel>Borrar mi nota</button>' : '<button class="wide ghost" data-close>Cancelar</button>'}`);
   }
+  if (sh.kind === 'xtra') return sheetWrap(`<div style="text-align:center"><div style="font-size:42px">🌙</div><h4>¿Vas a trabajar horas extra?</h4><div class="sub">Estás marcando fuera de tu horario de hoy (${sh.hor.ini}–${sh.hor.fin}).</div></div>
+    <button class="wide" data-xyes>Sí, son horas extra</button><button class="wide ghost" data-xno>No, es mi entrada normal</button><button class="wide ghost" data-close>Cancelar</button>`);
+  if (sh.kind === 'bio') return sheetWrap(`<h4>Tu frase</h4><div class="sub">Aparece en tu perfil y la ve todo D'La Rossa</div>
+    <div style="position:relative"><input id="b_tx" maxlength="80" class="fin" value="${esc(sh.tx ?? bioOf(S.me.id))}" placeholder="Ej.: Con trabajo y fe todo se logra" autocomplete="off"></div>
+    <button class="wide" data-bsave>Guardar frase</button>${bioOf(S.me.id) ? '<button class="wide ghost" data-bdel>Quitar mi frase</button>' : '<button class="wide ghost" data-close>Cancelar</button>'}`);
   if (sh.kind === 'vernota') {
     const p = dirP(sh.id), n = S.notes[sh.id];
-    return sheetWrap(`<div style="text-align:center"><div class="npreview"><div class="nbub big"><p>${esc(n.tx)}</p></div>${av(p)}</div><b style="font-size:16px">${esc(p.n)}</b><div class="sub" style="margin-top:2px">${esc(p.puesto || '')} · ${esc(storeN(p.store))} · ${ago(tsMs(n.at))}</div>
+    return sheetWrap(`<div style="text-align:center"><div class="npreview"><div class="nbub big"><p>${esc(n.tx)}</p></div>${av(p)}</div><b style="font-size:16px">${esc(p.n)}</b><div class="sub" style="margin-top:2px">${esc(p.puesto || '')}${isSup(p) ? '' : ` · ${esc(storeN(p.store))}`} · ${ago(tsMs(n.at))}</div>${n.bio ? `<div class="biov">“${esc(n.bio)}”</div>` : ''}
     ${isMgr() ? '<button class="peek" data-nhide style="color:var(--warn)">Ocultar esta nota</button>' : ''}<button class="wide ghost" data-close>Cerrar</button></div>`);
   }
   return '';
@@ -538,7 +587,9 @@ function storeSheet(sh) {
   <label class="lbl">Nombre</label><input id="s_n" class="fin" value="${esc(s.n)}"><label class="lbl">Ciudad / lugar</label><input id="s_c" class="fin" value="${esc(s.city || '')}">
   <label class="chk"><input type="checkbox" id="s_m" ${s.mall ? 'checked' : ''}> Es tienda de centro comercial</label>
   <label class="lbl">Ubicación</label><div class="note" style="margin-top:0">${s.lat ? `📍 ${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}` : 'Sin ubicación guardada.'}</div>
-  <button class="wide ghost" data-sgeo ${S.busy ? 'disabled' : ''}>${ico('pin')} Usar mi ubicación actual</button>
+  <div style="display:flex;gap:8px"><button class="wide ghost" data-smap style="margin:0;flex:1">🗺️ Elegir en el mapa</button><button class="wide ghost" data-sgeo style="margin:0;flex:1" ${S.busy ? 'disabled' : ''}>${ico('pin')} Estoy aquí</button></div>
+  <label class="lbl">O pega coordenadas / enlace de Google Maps</label><div style="display:flex;gap:8px"><input id="s_ll" class="fin" style="flex:1;margin:0" placeholder="14.8347, -91.5181"><button class="wide ghost" data-sll style="margin:0;width:auto;padding:0 14px">Usar</button></div>
+  <div class="rsmall" style="margin:4px 0 8px">En Google Maps mantén presionado el punto de la tienda y copia los números que aparecen arriba.</div>
   <label class="lbl">Radio permitido para marcar (metros)</label><input id="s_r" class="fin" type="number" min="30" step="10" value="${s.radius || 150}">
   ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-ssave ${S.busy ? 'disabled' : ''}>Guardar</button><button class="wide ghost" data-close>Cancelar</button>`);
 }
@@ -604,7 +655,7 @@ function render() {
   root.innerHTML = `<div class="topbar">${t === 'inicio' ? `<div class="wordmark"><span class="rlmark"></span><span>rosita</span></div>` : `<div class="ttl">${title}</div>`}<div class="sp"></div>${pend ? `<button class="tbi" data-tab="equipo">${ico('heart')}<i>${pend}</i></button>` : ''}</div>
   <div class="body sbody">${body}</div>
   <nav class="bnav"><button data-tab="inicio" class="${t === 'inicio' ? 'on' : ''}">${ico('home')}</button><button data-tab="equipo" class="${t === 'equipo' ? 'on' : ''}">${ico('users')}${pend ? `<i>${pend}</i>` : ''}</button>
-  <button data-tab="marcar" class="mark ${myState() === 'trabajando' ? 'working' : ''}">${ico(myState() === 'fuera' ? 'in' : myState() === 'salio' ? 'check' : 'clock')}</button>
+  ${isSup() ? `<button data-crear class="mark">${ico('plus')}</button>` : `<button data-tab="marcar" class="mark ${['trabajando', 'extra'].includes(myState()) ? 'working' : ''}">${ico(myState() === 'fuera' ? 'in' : myState() === 'salio' ? 'check' : 'clock')}</button>`}
   <button data-tab="perfil" class="pfnav ${t === 'perfil' ? 'on' : ''}">${av(S.me)}</button></nav>` + sheetHtml();
   if (keep && $('.sbody')) $('.sbody').scrollTop = sc;
 }
@@ -638,9 +689,10 @@ async function tryPin() {
   try { await signInWithEmailAndPassword(auth, sel.loginEmail, pw(S.pinbuf)); S.pinbuf = ''; S.pick = null; S.err = null; }
   catch (e) { S.err = e.code === 'auth/too-many-requests' ? 'Demasiados intentos. Espera unos minutos.' : 'PIN incorrecto'; S.pinbuf = ''; render(); const d = $('#dots'); d && d.classList.add('shake'); }
 }
-async function doMark(type) {
+async function doMark(type, ok) {
   const u = S.me, np = nowParts(), hor = horDe(u, np.day), st = S.stores[u.store] || {};
-  const free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role);
+  const free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role) || XT.includes(type);
+  if (type === 'entrada' && !ok && hor && (np.min >= toMin(hor.fin) || np.min < toMin(hor.ini) - 60)) { S.sheet = { kind: 'xtra', hor }; render(); return; }
   S.busy = true; render();
   const g = await geo();
   let gps = { ok: g.ok };
@@ -650,16 +702,17 @@ async function doMark(type) {
   const lateReal = late > 0 ? np.min - toMin(hor.ini) : 0;
   try {
     const b = writeBatch(db);
-    b.set(doc(C('marks')), { sid: u.id, type, day: np.day, hm: np.hm, min: np.min, at: serverTimestamp(), store: u.store, gps, late: lateReal });
+    const xo = type === 'extrafin' ? openExtra([...(S.myMarksY || []), ...S.myMarks]) : null, xmin = xo ? (xo.day === np.day ? 0 : 1440) + np.min - xo.min : 0;
+    b.set(doc(C('marks')), { sid: u.id, type, day: np.day, hm: np.hm, min: np.min, at: serverTimestamp(), store: u.store, gps, late: lateReal, ...(xo ? { desde: xo.day + ' ' + xo.hm, extraMin: xmin } : {}) });
     const upd = {};
     if (type === 'entrada') upd.arr = { [u.id]: { t: np.hm, st: u.store, late: lateReal, far: gps.inside === false } };
     if (type === 'salida') upd.out = { [u.id]: np.hm };
     if (type === 'almuerzo') upd.lunch = { [u.id]: { o: np.hm } };
     if (type === 'regreso') upd.lunch = { [u.id]: { o: (S.myMarks.filter(x => x.type === 'almuerzo').pop() || {}).hm || '', r: np.hm } };
-    b.set(D('days', np.day), upd, { merge: true });
+    if (Object.keys(upd).length) b.set(D('days', np.day), upd, { merge: true });
     await b.commit();
     S.busy = false; if (type === 'entrada' || type === 'salida') S.tab = 'inicio'; render();
-    toast({ entrada: `Entrada registrada ${np.hm}${!g.ok ? ' · sin ubicación' : ''}`, almuerzo: 'Buen provecho 🍽️', regreso: 'Regreso registrado', salida: `Salida registrada ${np.hm} · ¡gracias!` }[type]);
+    toast({ extra: `Horas extra desde las ${np.hm} 🌙`, extrafin: `Horas extra terminadas · ${hmin(xmin)}`, entrada: `Entrada registrada ${np.hm}${!g.ok ? ' · sin ubicación' : ''}`, almuerzo: 'Buen provecho 🍽️', regreso: 'Regreso registrado', salida: `Salida registrada ${np.hm} · ¡gracias!` }[type]);
   } catch (e) { console.error(e); S.busy = false; render(); toast('No se pudo registrar. Revisa tu internet.'); }
 }
 function readUserForm() {
@@ -782,6 +835,8 @@ document.addEventListener('click', async e => {
   if (d.sub) { S.sub = d.sub; render(); return; }
   if (d.scope) { S.scope = d.scope; render(); return; }
   if (d.mark) return doMark(d.mark);
+  if (d.xyes !== undefined) { S.sheet = null; return doMark('extra'); }
+  if (d.xno !== undefined) { S.sheet = null; return doMark('entrada', true); }
   if (d.logout !== undefined) { stopListeners(); await signOut(auth); S.tab = 'inicio'; return; }
   if (d.pinchg !== undefined) { S.sheet = { kind: 'pin' }; render(); return; }
   if (d.pinsave !== undefined) {
@@ -804,6 +859,18 @@ document.addEventListener('click', async e => {
   if (d.snew !== undefined) { S.sheet = { kind: 'store' }; render(); return; }
   if (d.sedit) { S.sheet = { kind: 'store', id: d.sedit, s: { ...S.stores[d.sedit] } }; render(); return; }
   if (d.ssave !== undefined) return saveStore();
+  if (d.smap !== undefined || d.sll !== undefined) {
+    const sh = S.sheet; sh.s = { ...(sh.s || {}), n: $('#s_n').value, city: $('#s_c').value, mall: $('#s_m').checked, radius: +$('#s_r').value || 150 };
+    if (d.sll !== undefined) { const ll = parseLL($('#s_ll').value); if (!ll) { sh.err = 'No reconozco esas coordenadas. Ej.: 14.8347, -91.5181'; return render(); } sh.s.lat = ll.lat; sh.s.lng = ll.lng; sh.err = null; render(); toast('Ubicación puesta. Toca Guardar.'); return; }
+    S.sheet = { kind: 'mapa', back: sh, lat: sh.s.lat, lng: sh.s.lng }; render(); openMap().catch(() => toast('No se pudo cargar el mapa. Revisa tu internet.')); return;
+  }
+  if (d.mok !== undefined) { if (!S.sheet.lat) return toast('Toca el mapa para poner el pin'); return closeMap(true); }
+  if (d.mcancel !== undefined) return closeMap(false);
+  if (d.mq !== undefined) {
+    const q = $('#m_q').value.trim(); if (!q) return; const ll = parseLL(q); if (ll) return S.sheet.setLL && S.sheet.setLL(ll);
+    try { const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gt&q=' + encodeURIComponent(q)); const j = await r.json(); if (!j.length) return toast('No encontré ese lugar. Mueve el mapa a mano.'); S.sheet.setLL && S.sheet.setLL({ lat: +j[0].lat, lng: +j[0].lon }, 17); }
+    catch (er) { toast('No se pudo buscar. Mueve el mapa a mano.'); } return;
+  }
   if (d.sgeo !== undefined) {
     const sh = S.sheet; sh.s = { ...(sh.s || {}), n: $('#s_n').value, city: $('#s_c').value, mall: $('#s_m').checked, radius: +$('#s_r').value || 150 };
     S.busy = true; render(); const g = await geo(); S.busy = false;
@@ -820,17 +887,20 @@ document.addEventListener('click', async e => {
   if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Aprobado' : 'Rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
   // muro
   if (d.crear !== undefined) { S.sheet = { kind: 'crear' }; render(); return; }
-  if (d.crear2) { S.sheet = d.crear2 === 'anuncio' ? { kind: 'anuncio', aud: role() === 'encargada' ? S.me.store : 'all' } : d.crear2 === 'foto' ? { kind: 'foto', tag: FTAGS[0], store: S.me.store === 'of' ? 'ut' : S.me.store } : { kind: 'reco', cat: 'atencion' }; render(); return; }
+  if (d.crear2) { S.sheet = d.crear2 === 'anuncio' ? { kind: 'anuncio', aud: role() === 'encargada' ? S.me.store : 'all' } : d.crear2 === 'foto' ? { kind: 'foto', tag: FTAGS[0], store: S.me.store } : { kind: 'reco', cat: 'atencion' }; render(); return; }
   if (d.apub !== undefined) {
     const tx = $('#a_tx').value.trim(), aud = role() === 'encargada' ? S.me.store : $('#a_aud').value; S.sheet.tx = tx; S.sheet.aud = aud;
     if (tx.length < 4) { S.sheet.err = 'Escribe el anuncio'; return render(); }
     S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'anuncio', by: S.me.id, tx, aud, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast('Anuncio publicado 📣'); } catch (er) { console.error(er); S.busy = false; S.sheet.err = 'No se pudo publicar'; render(); } return;
   }
-  if (d.ftag) { S.sheet.cap = $('#f_cap').value; if ($('#f_st')) S.sheet.store = $('#f_st').value; S.sheet.tag = d.ftag; render(); return; }
+  if (d.ftag) { readFoto(); S.sheet.tag = d.ftag; render(); if (d.ftag === 'otro') setTimeout(() => { const i = $('#f_tagx'); i && i.focus(); }, 50); return; }
   if (d.fpub !== undefined) {
-    const sh = S.sheet; sh.cap = $('#f_cap').value.trim(); if ($('#f_st')) sh.store = $('#f_st').value;
+    const sh = S.sheet; readFoto(); sh.cap = sh.cap.trim();
     if (!sh.img) { sh.err = 'Elige una foto'; return render(); }
-    S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'foto', by: S.me.id, img: sh.img, tag: sh.tag, tx: sh.cap, store: sh.store || S.me.store, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast('Foto compartida'); } catch (er) { console.error(er); S.busy = false; sh.err = 'No se pudo publicar'; render(); } return;
+    if (sh.store === 'fuera' && (sh.lugar || '').trim().length < 3) { sh.err = 'Escribe dónde fue la actividad'; return render(); }
+    if (sh.tag === 'otro' && !(sh.tagx || '').trim()) { sh.err = 'Escribe la etiqueta'; return render(); }
+    const tag = sh.tag === 'otro' ? '✏️ ' + sh.tagx.trim() : sh.tag;
+    S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'foto', by: S.me.id, img: sh.img, tag, tx: sh.cap, store: sh.store || S.me.store, ...(sh.store === 'fuera' ? { lugar: sh.lugar.trim() } : {}), at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast('Foto compartida'); } catch (er) { console.error(er); S.busy = false; sh.err = 'No se pudo publicar'; render(); } return;
   }
   if (d.rpick) { S.sheet.tx = $('#r_tx').value; S.sheet.to = d.rpick; render(); return; }
   if (d.rcat) { S.sheet.tx = $('#r_tx').value; S.sheet.cat = d.rcat; render(); return; }
@@ -848,10 +918,13 @@ document.addEventListener('click', async e => {
   if (d.like) { const it = S.posts.find(x => x.id === d.like), on = !(it.likedBy || {})[S.me.id]; const lb = { ...(it.likedBy || {}) }; if (on) lb[S.me.id] = true; else delete lb[S.me.id]; it.likedBy = lb; S._keepScroll = true; render(); try { await updateDoc(D('posts', d.like), { likedBy: lb }); } catch (er) { console.error(er); } return; }
   if (d.clap) { const it = S.posts.find(x => x.id === d.clap); it.claps = (it.claps || 0) + 1; S._keepScroll = true; render(); toast('👏 Aplaudiste'); try { await updateDoc(D('posts', d.clap), { claps: it.claps }); } catch (er) { } return; }
   if (d.pdel) { if (!confirmDel()) return; try { await deleteDoc(D('posts', d.pdel)); toast('Publicación borrada'); } catch (er) { toast('No se pudo borrar'); } return; }
-  if (d.note) { S.sheet = d.note === S.me.id ? { kind: 'nota' } : (S.notes[d.note] ? { kind: 'vernota', id: d.note } : null); render(); if (d.note === S.me.id) setTimeout(() => { const i = $('#n_tx'); i && i.focus(); }, 50); return; }
+  if (d.note) { S.sheet = d.note === S.me.id ? { kind: 'nota' } : ((S.notes[d.note] || {}).tx ? { kind: 'vernota', id: d.note } : null); render(); if (d.note === S.me.id) setTimeout(() => { const i = $('#n_tx'); i && i.focus(); }, 50); return; }
   if (d.nemo) { const i = $('#n_tx'); if (i.value.length + d.nemo.length <= 60) i.value = (i.value + ' ' + d.nemo).trim(); i.dispatchEvent(new Event('input', { bubbles: true })); return; }
-  if (d.nsave !== undefined) { const v = $('#n_tx').value.trim(); if (!v) return toast('Escribe tu nota'); try { await setDoc(D('notes', S.me.id), { tx: v.slice(0, 60), at: Date.now() }); S.sheet = null; render(); toast('Nota compartida · dura 24 horas'); } catch (er) { toast('No se pudo guardar'); } return; }
-  if (d.ndel !== undefined) { try { await deleteDoc(D('notes', S.me.id)); S.sheet = null; render(); } catch (er) { } return; }
+  if (d.nsave !== undefined) { const v = $('#n_tx').value.trim(); if (!v) return toast('Escribe tu nota'); try { await setDoc(D('notes', S.me.id), { tx: v.slice(0, 60), at: Date.now() }, { merge: true }); S.sheet = null; render(); toast('Nota compartida · dura 24 horas'); } catch (er) { toast('No se pudo guardar'); } return; }
+  if (d.bio !== undefined) { S.sheet = { kind: 'bio' }; render(); setTimeout(() => { const i = $('#b_tx'); i && i.focus(); }, 50); return; }
+  if (d.bsave !== undefined || d.bdel !== undefined) { const v = d.bdel !== undefined ? '' : $('#b_tx').value.trim().slice(0, 80);
+    try { await setDoc(D('notes', S.me.id), { bio: v || deleteField() }, { merge: true }); S.notes[S.me.id] = { ...(S.notes[S.me.id] || {}), bio: v }; S.sheet = null; render(); toast(v ? 'Frase guardada ✨' : 'Frase quitada'); } catch (er) { console.error(er); toast('No se pudo guardar'); } return; }
+  if (d.ndel !== undefined) { try { await setDoc(D('notes', S.me.id), { tx: deleteField(), at: deleteField() }, { merge: true }); S.sheet = null; render(); } catch (er) { } return; }
   if (d.nhide !== undefined) { try { await deleteDoc(D('notes', S.sheet.id)); S.sheet = null; render(); toast('Nota ocultada'); } catch (er) { toast('No se pudo ocultar'); } return; }
   if (d.story) { const a = ((S.today || {}).arr || {})[d.story], p = P(d.story); toast(a ? `${first(p.n)} llegó a las ${a.t} ☀️` : `${first(p.n)} todavía no llega`); return; }
 });
@@ -861,6 +934,39 @@ function repaintPost(id) {
 }
 // Tocar fuera de la barra de reacciones la cierra
 document.addEventListener('pointerdown', e => { if (S.rxOpen && !e.target.closest('.rxwrap')) { const id = S.rxOpen; S.rxOpen = null; repaintPost(id); } });
+function readFoto() { const sh = S.sheet, v = id => $('#' + id) ? $('#' + id).value : undefined; if (v('f_cap') !== undefined) sh.cap = v('f_cap'); if (v('f_st') !== undefined) sh.store = v('f_st'); if (v('f_lugar') !== undefined) sh.lugar = v('f_lugar'); if (v('f_tagx') !== undefined) sh.tagx = v('f_tagx'); }
+// Lee coordenadas escritas o un enlace largo de Google Maps
+function parseLL(t) {
+  t = decodeURIComponent(t || '');
+  const pats = [/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/, /@(-?\d+\.\d+),\s*(-?\d+\.\d+)/, /[?&](?:q|ll|query|destination)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/, /(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/];
+  for (const r of pats) { const m = t.match(r); if (m) { const lat = +m[1], lng = +m[2]; if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { lat, lng }; } }
+  return null;
+}
+let leafletP = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (!leafletP) leafletP = new Promise((res, rej) => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'leaflet/leaflet.css'; document.head.appendChild(l); const sc = document.createElement('script'); sc.src = 'leaflet/leaflet.js'; sc.onload = () => res(window.L); sc.onerror = rej; document.head.appendChild(sc); });
+  return leafletP;
+}
+let MAP = null;
+async function openMap() {
+  const sh = S.sheet, L = await loadLeaflet(); if (!$('#map')) return;
+  const c = sh.lat ? [sh.lat, sh.lng] : [14.8347, -91.5181];
+  MAP = L.map('map', { zoomControl: true }).setView(c, sh.lat ? 18 : 13);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(MAP);
+  L.Icon.Default.imagePath = 'leaflet/images/';
+  const mk = L.marker(c, { draggable: true }).addTo(MAP), circ = L.circle(c, { radius: sh.back.s.radius || 150, color: '#f400a1', weight: 1, fillOpacity: .12 }).addTo(MAP);
+  const set = ll => { sh.lat = ll.lat; sh.lng = ll.lng; mk.setLatLng(ll); circ.setLatLng(ll); const e = $('#m_ll'); if (e) e.textContent = `${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`; };
+  MAP.on('click', e => set(e.latlng)); mk.on('dragend', () => set(mk.getLatLng()));
+  sh.setLL = (ll, z) => { set(ll); MAP.setView([ll.lat, ll.lng], z || 18); };
+  setTimeout(() => MAP && MAP.invalidateSize(), 200);
+}
+function closeMap(save) {
+  const sh = S.sheet, back = sh.back;
+  if (save && sh.lat) { back.s.lat = sh.lat; back.s.lng = sh.lng; back.err = null; }
+  if (MAP) { MAP.remove(); MAP = null; }
+  S.sheet = back; render(); if (save && sh.lat) toast('Ubicación elegida. Toca Guardar.');
+}
 let delArm = 0; function confirmDel() { if (Date.now() - delArm < 3000) return true; delArm = Date.now(); toast('Toca otra vez para borrar'); return false; }
 document.addEventListener('input', e => {
   const t = e.target;
@@ -873,6 +979,7 @@ document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'u_s') { const h = $('#u_h'); if (h) h.value = suggestHor(t.value); }
   if (t.id === 'c_sid' || t.id === 'p_sid') { S.sheet.sid = t.value; render(); }
+  if (t.id === 'f_st') { readFoto(); render(); if (t.value === 'fuera') setTimeout(() => { const i = $('#f_lugar'); i && i.focus(); }, 50); }
   if (t.dataset && t.dataset.photo !== undefined && t.files[0]) {
     try { const img = await compress(t.files[0], 200, .82); await updateDoc(D('directory', S.me.id), { photo: img }); S.me.photo = img; const d = S.dir.find(x => x.id === S.me.id); if (d) d.photo = img; render(); toast('¡Listo! Tu foto ya se ve en el equipo 📸'); }
     catch (er) { console.error(er); toast('No se pudo subir la foto'); }

@@ -11,4 +11,4 @@ export const firebaseConfig = {
 // Dominio interno para las cuentas (no es un correo real)
 export const LOGIN_DOMAIN = "personal.rositalabs.app";
 export const TZ = "America/Guatemala";
-export const VERSION = "1.1 · piloto";
+export const VERSION = "1.2 · piloto";
