@@ -56,3 +56,10 @@ npm run emu                      # emuladores de Firebase (Auth + Firestore)
 cd public && python3 -m http.server 5055
 # abrir http://localhost:5055/?emu=1
 ```
+
+## Publicación
+
+La app se publica sola en **GitHub Pages** (`.github/workflows/pages.yml`) cada vez que se sube un cambio a `main`:
+https://sica4370-sudo.github.io/rosita-personal/
+
+Las reglas de Firestore (`firestore.rules`) se publican desde la consola de Firebase → Firestore → Reglas, o con `npm run deploy`. El flujo `firebase-deploy.yml` (Firebase Hosting) queda como opción manual.

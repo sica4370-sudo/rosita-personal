@@ -1,10 +1,8 @@
 # Publica Rosita Personal en Firebase Hosting y actualiza las reglas de seguridad
-# cada vez que se sube un cambio a la rama main.
+# (manual, opcional; la publicación normal es GitHub Pages).
 name: Publicar Rosita Personal
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  workflow_dispatch:  # manual: requiere el secreto FIREBASE_SERVICE_ACCOUNT
 jobs:
   deploy:
     runs-on: ubuntu-latest
