@@ -1,6 +1,6 @@
 // Rachas estilo Duolingo e insignias de Rosita Personal.
 // Todo se calcula con el resumen diario (days/{fecha}.arr): quién llegó, a qué hora y cuántos minutos tarde.
-export const COMODIN_MAX = 20;   // un comodín cubre hasta 20 min de tardanza
+export const COMODIN_MAX = 15;   // un comodín cubre hasta 15 min de tardanza
 export const COMODINES_MES = 2;  // comodines por persona cada mes
 export const VENTANA = 60;       // días hacia atrás que se revisan
 
