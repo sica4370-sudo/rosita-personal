@@ -134,5 +134,29 @@ service cloud.firestore {
         && request.resource.data.get('rx', {}).diff(resource.data.get('rx', {})).affectedKeys().hasOnly([me().sid]);
       allow delete: if hasMe() && (me().sid == sid || isMgr());
     }
+
+    // ---------- Mando Gerentes (tableros por área) ----------
+    // Datos de cada área: los escribe solo el proceso automático de la Arena (llave de servicio).
+    // Los lee Gerencia o quien Gerencia anotó en mandoAcceso/{area}.
+    function accesoArea(area) {
+      return hasMe() && (isAdmin()
+        || (exists(/databases/$(db)/documents/mandoAcceso/$(area))
+            && me().sid in get(/databases/$(db)/documents/mandoAcceso/$(area)).data.get('sids', [])));
+    }
+    match /mando/{area} {
+      allow read: if accesoArea(area);
+      allow write: if false;
+      match /datos/{pieza} {
+        allow read: if accesoArea(area);
+        allow write: if false;
+      }
+    }
+    // Quién ve cada área: solo Gerencia lo cambia; cada quien puede revisar a qué áreas tiene acceso.
+    match /mandoAcceso/{area} {
+      allow read: if hasMe();
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['sids', 'por', 'en'])
+        && request.resource.data.sids is list && request.resource.data.sids.size() <= 60;
+    }
   }
 }
