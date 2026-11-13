@@ -1,6 +1,7 @@
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, connectAuthEmulator, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, deleteField, documentId } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, deleteField, documentId, increment, FieldPath } from 'firebase/firestore';
+import { getMessaging, getToken, isSupported as msgSupported } from 'firebase/messaging';
 import { streak, storeStreak, earned, BADGES, COMODINES_MES, COMODIN_MAX, VENTANA } from './rachas.js';
 import { firebaseConfig, LOGIN_DOMAIN, TZ, VERSION } from './config.js';
 import { ROLES, ROLE_ORDER, DEPTS, DIAS, DIAS_C, MESES, STORES_SEED, HORARIOS_SEED, RCATS, FTAGS, NEMO, COLORS, RX, worksOn, restReason } from './data.js';
@@ -59,6 +60,8 @@ const ICONS = {
   cal: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   swap: '<path d="M16 3h5v5"/><path d="M21 3 14 10"/><path d="M8 21H3v-5"/><path d="m3 21 7-7"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
   store: '<path d="M3 9h18l-1.5-5h-15Z"/><path d="M4 9v11h16V9"/><path d="M9 20v-6h6v6"/>'
 };
 const ico = k => `<svg class="i" viewBox="0 0 24 24">${ICONS[k] || ''}</svg>`;
@@ -151,13 +154,14 @@ async function enter(sid) {
   S.me.photo = (S.dir.find(x => x.id === sid) || {}).photo;
   pushRecent(sid);
   startListeners();
-  setTimeout(() => { S.phase = 'app'; S.tab = 'inicio'; render(); }, 600);
+  setTimeout(() => { S.phase = 'app'; S.tab = 'inicio'; render(); handleDeep(); if (PUSH_OK() && Notification.permission === 'granted') pushToken(false); }, 600);
 }
 function stopListeners() { S.unsub.forEach(f => { try { f(); } catch (e) { } }); S.unsub = []; }
 function startListeners() {
   stopListeners();
   const day = nowParts().day;
-  S.unsub.push(onSnapshot(query(C('posts'), orderBy('at', 'desc'), limit(40)), s => { S.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
+  S.unsub.push(onSnapshot(query(C('posts'), orderBy('at', 'desc'), limit(40)), s => { S.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); handleDeep(); }));
+  S.unsub.push(onSnapshot(query(C('avisos'), where('to', '==', S.me.id)), s => { S.avisos = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => tsMs(b.at) - tsMs(a.at)); rerender(); appBadge(); }, e => console.error('avisos', e)));
   S.unsub.push(onSnapshot(C('notes'), s => { S.notes = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); rerender(); }));
   S.unsub.push(onSnapshot(D('days', day), s => { S.today = s.exists() ? s.data() : {}; rerender(); }));
   S.unsub.push(onSnapshot(C('directory'), s => {
@@ -421,12 +425,266 @@ function rxSummary(it) {
   const top = Object.entries(cnt).sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
   return { n: Object.values(cnt).reduce((a, b) => a + b, 0), top };
 }
+
+/* ================== RED SOCIAL: menciones, comentarios, visto por, campanita, perfiles, avisos ================== */
+// Cómo se escribe a alguien al mencionarlo: nombre y primer apellido (ej. @Astrid Pérez)
+const handle = sid => (dirP(sid).n || '').split(' ').filter(Boolean).slice(0, 2).join(' ');
+const snip = (s, n = 70) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+// Texto con las @menciones resaltadas; al tocarlas se abre el perfil
+function richTx(tx, men) {
+  let h = nl(tx || '');
+  const ids = [...new Set(men || [])].filter(sid => handle(sid)).sort((a, b) => handle(b).length - handle(a).length), keys = [];
+  ids.forEach((sid, i) => { const lb = esc('@' + handle(sid)); if (h.includes(lb)) { h = h.split(lb).join(`\u0001${i}\u0001`); keys[i] = `<button class="men" data-prof="${sid}">${lb}</button>`; } });
+  return h.replace(/\u0001(\d+)\u0001/g, (_, i) => keys[i] || '');
+}
+// Personas mencionadas en un texto (solo las que siguen activas)
+const mentionsIn = tx => Object.values(S.staff).filter(p => p.active !== false && handle(p.id) && (tx || '').includes('@' + handle(p.id))).map(p => p.id);
+// Sugerencias al escribir "@"
+function menQuery(el) { const v = el.value.slice(0, el.selectionStart ?? el.value.length), m = v.match(/(^|\s)@([^\s@]{0,20})$/); return m ? { q: m[2], at: v.length - m[2].length - 1 } : null; }
+function menSuggest(el) {
+  const box = el.parentElement && el.parentElement.querySelector('.mensug'); if (!box) return;
+  const m = menQuery(el); if (!m) { box.innerHTML = ''; S._men = null; return; }
+  const q = norm(m.q), list = Object.values(S.staff).filter(p => p.active !== false && p.id !== S.me.id && (!q || norm(p.n).split(' ').some(w => w.startsWith(q))))
+    .sort((a, b) => (b.store === S.me.store) - (a.store === S.me.store) || a.n.localeCompare(b.n)).slice(0, 6);
+  S._men = { el, at: m.at, len: m.q.length + 1 };
+  box.innerHTML = list.map(p => `<button type="button" data-menpick="${p.id}">${av(dirP(p.id))}<b>${esc(handle(p.id))}</b><small>${esc(isSup(p) ? (p.puesto || '') : storeN(p.store))}</small></button>`).join('');
+}
+const menBox = (inner, cls = '') => `<div class="mwrap ${cls}"><div class="mensug"></div>${inner}</div>`;
+
+// ---- Avisos (campanita): cada quien recibe los suyos en /avisos ----
+const PRI = { mention: 4, reco: 4, comment: 3, reply: 2, rx: 1 };
+async function avisar(list) {
+  const by = {};
+  list.forEach(a => { const p = S.staff[a.to]; if (!p || a.to === S.me.id || p.active === false) return; if (!by[a.to] || PRI[a.type] > PRI[by[a.to].type]) by[a.to] = a; });
+  const xs = Object.values(by); if (!xs.length) return;
+  const b = writeBatch(db);
+  xs.forEach(a => b.set(doc(C('avisos')), { to: a.to, from: S.me.id, type: a.type, post: a.post || null, c: !!a.c, tx: snip(a.tx, 120), at: serverTimestamp(), read: false, sent: a.type === 'rx' }));
+  try { await b.commit(); } catch (e) { console.error('avisos', e); }
+}
+const BELL_KEY = () => 'rp_bell_' + S.me.id;
+const bellAt = () => { try { return +localStorage.getItem(BELL_KEY()) || 0; } catch (e) { return 0; } };
+const setBell = ms => { try { localStorage.setItem(BELL_KEY(), String(ms)); } catch (e) { } };
+// ¿Esta persona puede ver esta publicación? (los anuncios de una tienda solo los ve esa tienda)
+const canSeePost = it => !(it.kind === 'anuncio' && it.aud && it.aud !== 'all' && it.aud !== S.me.store && !isMgr() && it.by !== S.me.id);
+function bellItems() {
+  const u = S.me, cut = Date.now() - 4 * 864e5;
+  const a = (S.avisos || []).map(x => ({ k: 'a', id: x.id, at: tsMs(x.at), from: x.from, type: x.type, post: x.post, c: x.c, tx: x.tx, unread: !x.read }));
+  const conAviso = new Set((S.avisos || []).map(x => x.post));
+  const p = S.posts.filter(it => it.by !== u.id && tsMs(it.at) > cut && canSeePost(it) && !conAviso.has(it.id))
+    .map(it => ({ k: 'p', id: 'p_' + it.id, at: tsMs(it.at), from: it.by, type: 'post', post: it.id, it }));
+  return [...a, ...p].sort((x, y) => y.at - x.at).slice(0, 60);
+}
+const bellCount = () => { if (!S.me) return 0; const b = bellAt(); return bellItems().filter(x => x.at > b && (x.k === 'p' || x.unread)).length; };
+function appBadge() { try { const n = bellCount(); if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch (e) { } }
+const BIC = { comment: '💬', reply: '💬', mention: '@', reco: '👏', post: '📣' };
+function bellLine(x) {
+  const nm = `<b>${x.from === 'rosita' ? 'Rosita' : esc(dirP(x.from).n || 'Alguien')}</b>`;
+  if (x.k === 'p') {
+    const it = x.it, w = it.kind === 'anuncio' ? 'publicó un anuncio' : it.kind === 'foto' ? 'compartió una foto' : it.kind === 'texto' ? 'publicó' : it.kind === 'reco' ? `reconoció a ${esc(first(dirP(it.to).n))} 👏`
+      : it.kind2 === 'noticiero' ? 'publicó Rosita Noticias 🎙️' : it.kind2 === 'tabla' ? 'publicó cómo va la Arena 🏆' : 'tiene noticias de última hora ⚡';
+    const t = it.kind === 'auto' ? '' : it.tx;
+    return `${nm} ${w}${t ? `: “${esc(snip(t))}”` : ''}`;
+  }
+  if (x.type === 'rx') return `${nm} reaccionó ${esc(x.tx || '❤️')} a tu publicación`;
+  const w = { comment: 'comentó tu publicación', reply: 'también comentó en una publicación que comentaste', mention: x.c ? 'te mencionó en un comentario' : 'te mencionó en una publicación', reco: 'te dio un reconocimiento 👏' }[x.type] || '';
+  return `${nm} ${w}${x.tx ? `: “${esc(snip(x.tx))}”` : ''}`;
+}
+function bellSheet(sh) {
+  const xs = bellItems();
+  const row = x => {
+    const ic = x.k === 'p' ? ({ foto: '📷', reco: '👏', texto: '✍️', auto: '🎙️' }[x.it.kind] || '📣') : x.type === 'rx' ? (x.tx || '❤️') : BIC[x.type] || '🔔';
+    const isNew = x.k === 'a' ? x.unread : x.at > sh.prev;
+    return `<button class="bitem ${isNew ? 'new' : ''}" data-bopen="${x.id}"><span class="bav">${x.from === 'rosita' ? '<span class="logo"><span class="rlmark"></span></span>' : av(dirP(x.from))}<i>${ic}</i></span><span class="btx"><span>${bellLine(x)}</span><small>${ago(x.at)}</small></span>${isNew ? '<em></em>' : ''}</button>`;
+  };
+  return sheetWrap(`<div class="chead"><b>Notificaciones</b><button class="cx" data-close>✕</button></div>${pushCard(true)}
+    ${xs.length ? `<div class="blist">${xs.map(row).join('')}</div>` : '<div class="cempty"><div>🔔</div><b>Todavía no tienes notificaciones</b><small>Aquí verás comentarios, menciones, reacciones y lo nuevo del equipo.</small></div>'}`, 'tall');
+}
+function openBell() { S.sheet = { kind: 'avisos', prev: bellAt() }; setBell(Date.now()); appBadge(); render(); }
+async function bellOpen(id) {
+  const x = bellItems().find(y => y.id === id); if (!x) return;
+  if (x.k === 'a' && x.unread) { const a = (S.avisos || []).find(y => y.id === x.id); if (a) a.read = true; updateDoc(D('avisos', x.id), { read: true }).catch(() => { }); }
+  if (!x.post || !S.posts.find(p => p.id === x.post)) { S.sheet = null; render(); return toast('Esa publicación ya no está'); }
+  if (['comment', 'reply'].includes(x.type) || (x.type === 'mention' && x.c)) return openComs(x.post);
+  S.sheet = null; goPost(x.post);
+}
+// Lleva a una publicación en Novedades y la resalta
+function goPost(id) {
+  S.tab = 'inicio'; S.scope = 'todo'; S.sheet = null; render();
+  setTimeout(() => { const el = document.querySelector(`article[data-post="${id}"]`); if (!el) return toast('Esa publicación ya no está en Novedades'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1800); }, 60);
+}
+
+// ---- Comentarios: posts/{id}/comments ----
+let comUnsub = null;
+function openComs(id, focus) {
+  if (comUnsub) { comUnsub(); comUnsub = null; }
+  S.coms = null; S.sheet = { kind: 'coms', id }; render();
+  comUnsub = onSnapshot(query(C('posts', id, 'comments'), orderBy('at')), s => { S.coms = s.docs.map(d => ({ id: d.id, ...d.data() })); paintComs(); }, e => { console.error(e); S.coms = []; paintComs(); });
+  if (focus) setTimeout(() => { const i = $('#c_tx'); i && i.focus(); }, 120);
+}
+function comsHtml() {
+  if (!S.coms) return '<div class="cempty"><div class="spin" style="margin:0 auto"></div></div>';
+  if (!S.coms.length) return '<div class="cempty"><div>💬</div><b>Todavía no hay comentarios</b><small>Escribe el primero.</small></div>';
+  return S.coms.map(c => {
+    const p = dirP(c.by), mine = c.by === S.me.id;
+    return `<div class="com"><button class="cav" data-prof="${c.by}">${av(p)}</button><div class="cb"><div class="cbub"><button class="cn" data-prof="${c.by}">${esc(p.n || '')}</button><p>${richTx(c.tx, c.men)}</p></div>
+      <div class="cmeta"><span>${ago(tsMs(c.at))}</span>${mine ? '' : `<button data-creply="${c.by}">Responder</button>`}${mine || isAdmin() ? `<button data-cdel="${c.id}">Borrar</button>` : ''}</div></div></div>`;
+  }).join('');
+}
+function paintComs() { const el = $('#comlist'); if (!el) return; el.innerHTML = comsHtml(); el.scrollTop = el.scrollHeight; }
+function comsSheet(sh) {
+  const it = S.posts.find(x => x.id === sh.id), p = it ? (it.by === 'rosita' ? { n: 'Rosita' } : dirP(it.by)) : {};
+  const ctx = it ? (it.kind === 'auto' ? (it.title || it.tx || '') : it.kind === 'reco' ? `Reconocimiento a ${dirP(it.to).n}` : it.tx || '') : '';
+  return `<div class="sheet-bg" data-bgclose><div class="sheet csheet"><div class="chead"><b>Comentarios</b><button class="cx" data-close>✕</button></div>
+    ${it ? `<div class="cctx"><b>${esc(p.n || '')}</b> ${esc(snip(ctx, 90))}</div>` : ''}
+    <div id="comlist" class="comlist">${comsHtml()}</div>
+    <div class="cbar">${av(S.me)}${menBox(`<textarea id="c_tx" rows="1" maxlength="500" placeholder="Escribe un comentario…" data-men></textarea>`, 'cin')}<button class="csend" data-csend title="Enviar">${ico('send')}</button></div></div></div>`;
+}
+async function sendCom() {
+  const sh = S.sheet, el = $('#c_tx'); if (!sh || !el) return;
+  const tx = el.value.trim(); if (!tx) return el.focus();
+  const it = S.posts.find(x => x.id === sh.id); if (!it) return toast('Esa publicación ya no está');
+  const men = mentionsIn(tx), prev = [...new Set((S.coms || []).map(c => c.by))];
+  el.value = ''; el.style.height = ''; const box = el.parentElement.querySelector('.mensug'); if (box) box.innerHTML = '';
+  const b = writeBatch(db);
+  b.set(doc(C('posts', sh.id, 'comments')), { by: S.me.id, tx, men, at: serverTimestamp() });
+  b.update(D('posts', sh.id), { nc: increment(1), lastC: { by: S.me.id, tx: snip(tx, 140), men, at: Date.now() } });
+  try { await b.commit(); } catch (e) { console.error(e); el.value = tx; return toast('No se pudo comentar. Revisa tu internet.'); }
+  avisar([...men.map(to => ({ to, type: 'mention', post: sh.id, tx, c: true })), { to: it.by, type: 'comment', post: sh.id, tx }, ...prev.map(to => ({ to, type: 'reply', post: sh.id, tx }))]);
+}
+async function delCom(cid) {
+  const id = S.sheet.id, rest = (S.coms || []).filter(c => c.id !== cid), last = rest[rest.length - 1];
+  const b = writeBatch(db);
+  b.delete(D('posts', id, 'comments', cid));
+  b.update(D('posts', id), { nc: increment(-1), lastC: last ? { by: last.by, tx: snip(last.tx, 140), men: last.men || [], at: tsMs(last.at) } : deleteField() });
+  try { await b.commit(); toast('Comentario borrado'); } catch (e) { console.error(e); toast('No se pudo borrar'); }
+}
+
+// ---- Visto por: posts/{id}.seen = { persona: hora } ----
+let SEEN_IO = null; const seenSent = {};
+function observeSeen() {
+  if (!('IntersectionObserver' in window) || !S.me || S.tab !== 'inicio') return;
+  if (!SEEN_IO) SEEN_IO = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { SEEN_IO.unobserve(e.target); const id = e.target.dataset.post; setTimeout(() => markSeen(id), 700); } }), { threshold: 0.5 });
+  SEEN_IO.disconnect();
+  document.querySelectorAll('article[data-post]').forEach(el => { const it = S.posts.find(x => x.id === el.dataset.post); if (it && it.by !== S.me.id && !(it.seen || {})[S.me.id] && !seenSent[it.id]) SEEN_IO.observe(el); });
+}
+async function markSeen(id) {
+  const it = S.posts.find(x => x.id === id); if (!it || it.by === S.me.id || (it.seen || {})[S.me.id] || seenSent[id] || document.hidden) return;
+  seenSent[id] = 1;
+  try { await updateDoc(D('posts', id), { [`seen.${S.me.id}`]: Date.now() }); } catch (e) { console.error(e); delete seenSent[id]; }
+}
+// Quiénes deberían ver una publicación (para "faltan por verlo")
+const audienceOf = it => Object.values(S.staff).filter(p => p.active !== false && p.id !== it.by && (it.kind !== 'anuncio' || !it.aud || it.aud === 'all' || p.store === it.aud));
+function seenSheet(sh) {
+  const it = S.posts.find(x => x.id === sh.id); if (!it) return '';
+  const seen = Object.entries(it.seen || {}).filter(([sid]) => P(sid)).sort((a, b) => b[1] - a[1]);
+  const boss = it.by === S.me.id || isAdmin() || isMgr();
+  const faltan = boss ? audienceOf(it).filter(p => !(it.seen || {})[p.id]).sort((a, b) => storeN(a.store).localeCompare(storeN(b.store))) : [];
+  const row = (p, t) => `<button class="lrow vrow" data-prof="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0;text-align:left"><b>${esc(p.n)}</b><small>${esc(isSup(p) ? (p.puesto || '') : storeN(p.store))}</small></div>${t ? `<small class="vt">${ago(t)}</small>` : ''}</button>`;
+  return sheetWrap(`<div class="chead"><b>👁️ Visto por ${seen.length}</b><button class="cx" data-close>✕</button></div>
+    ${seen.length ? `<div class="lcard">${seen.map(([sid, t]) => row(dirP(sid), t)).join('')}</div>` : '<div class="cempty"><small>Todavía nadie la ha visto.</small></div>'}
+    ${faltan.length ? `<div class="h3">Todavía no la ven <span>${faltan.length}</span></div><div class="lcard faltan">${faltan.map(p => row(p)).join('')}</div>` : boss && seen.length ? '<div class="note" style="margin-top:12px">✅ Ya la vio todo el equipo al que va dirigida.</div>' : ''}`, 'tall');
+}
+
+// ---- Perfil de cualquier persona ----
+function profSheet(sh) {
+  const sid = sh.id, p = dirP(sid), st = S.staff[sid] || {}, me = sid === S.me.id, r = rachas(), m = r && r.per[sid];
+  const recos = S.posts.filter(x => x.kind === 'reco' && x.to === sid), mine = S.posts.filter(x => x.by === sid && x.kind !== 'auto');
+  const cnt = {}; recos.forEach(x => cnt[x.cat] = (cnt[x.cat] || 0) + 1);
+  const n = S.notes[sid], note = n && n.tx && Date.now() - tsMs(n.at) < 864e5 ? n.tx : '', arr = ((S.today || {}).arr || {})[sid];
+  const canReco = !me && ['encargada', 'jefe', 'admin', 'fundador', 'sistemas'].includes(role()) && (role() !== 'encargada' || st.store === S.me.store);
+  const thumbs = mine.slice(0, 12).map(x => `<button class="pthumb ${x.kind === 'foto' ? '' : 'tx tb' + ((x.bg || 1))}" data-gopost="${x.id}">${x.kind === 'foto' ? `<img src="${x.img}" alt="" loading="lazy">` : `<span>${esc(snip(x.kind === 'reco' ? '👏 ' + (x.tx || '') : x.tx || '', 50))}</span>`}</button>`).join('');
+  return sheetWrap(`<div class="pfx"><button class="cx pfxx" data-close>✕</button>${sh.back ? '<button class="pback" data-pback>‹ Volver</button>' : ''}
+    <div class="pcover"></div><div class="pfav">${av(p, 'xl')}${note ? `<div class="nbub pfnote"><p>${esc(note)}</p></div>` : ''}</div>
+    <h3>${esc(p.n || '')}</h3><p class="pfsub">${esc(p.puesto || '')}${isSup(st) ? '' : ` · ${esc(storeN(st.store))}`}</p>
+    ${bioOf(sid) ? `<div class="biov">“${esc(bioOf(sid))}”</div>` : ''}
+    ${!isSup(st) && st.horario ? `<div class="pchip ${arr ? 'on' : ''}">${arr ? `☀️ Hoy llegó a las ${esc(arr.t)}` : '🌙 Hoy todavía no llega'}</div>` : ''}
+    <div class="pstats">${m ? `<div><b>🔥 ${m.cur}</b><span>racha · mejor ${m.best}</span></div>` : ''}<div><b>${recos.length}</b><span>reconoci&shy;mientos</span></div><div><b>${mine.length}</b><span>publica&shy;ciones</span></div></div>
+    ${canReco ? `<button class="wide" data-preco="${sid}">👏 Reconocer a ${esc(first(p.n))}</button>` : ''}
+    ${me ? `<button class="wide ghost" data-tab="perfil">Editar mi perfil</button>` : ''}
+    ${recos.length ? `<div class="h3">Reconocimientos</div><div class="hl">${Object.entries(cnt).map(([k, c]) => { const x = RCATS.find(y => y[0] === k) || RCATS[0]; return `<div><div class="hlc">${x[1]}${c > 1 ? `<i>${c}</i>` : ''}</div><span>${x[2]}</span></div>`; }).join('')}</div>` : ''}
+    ${inRacha(st) ? badgeGrid(sid) : ''}
+    ${thumbs ? `<div class="h3">Publicaciones</div><div class="pgridx">${thumbs}</div>` : ''}</div>`, 'tall');
+}
+function openProf(sid) {
+  if (!sid || sid === 'rosita' || !P(sid)) return;
+  const back = S.sheet && S.sheet.kind === 'coms' ? { kind: 'coms', id: S.sheet.id } : S.sheet && ['seen', 'avisos'].includes(S.sheet.kind) ? { ...S.sheet } : null;
+  S.sheet = { kind: 'perfil', id: sid, back }; render();
+}
+
+// ---- Publicación de texto (con fondo de color opcional, como Facebook) ----
+const TBG_N = 6, TBG_MAX = 130;
+function textoSheet(sh) {
+  const tx = sh.tx || '', big = sh.bg && tx.length <= TBG_MAX;
+  return sheetWrap(`<h4>✍️ Crear publicación</h4><div class="sub">La ve todo D'La Rossa · escribe <b>@</b> para mencionar a alguien</div>
+    <div class="tcomp">${av(S.me)}<div><b>${esc(S.me.n)}</b><small>🌎 Todo D'La Rossa</small></div></div>
+    ${menBox(`<textarea id="t_tx" class="fin ttx ${big ? 'tbg tb' + sh.bg : ''}" rows="${big ? 4 : 5}" maxlength="1500" data-men placeholder="¿Qué quieres contarle al equipo, ${esc(first(S.me.n))}?">${esc(tx)}</textarea>`)}
+    <div class="tbgs"><button data-tbg="0" class="${!sh.bg ? 'on' : ''}" title="Sin fondo">Aa</button>${Array.from({ length: TBG_N }, (_, i) => `<button data-tbg="${i + 1}" class="tb${i + 1} ${sh.bg === i + 1 ? 'on' : ''}"></button>`).join('')}<small id="tbgh">${sh.bg && tx.length > TBG_MAX ? 'El fondo de color es para textos cortos' : ''}</small></div>
+    ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-tpub ${S.busy ? 'disabled' : ''}>${S.busy ? 'Publicando…' : 'Publicar'}</button><button class="wide ghost" data-close>Cancelar</button>`);
+}
+async function pubTexto() {
+  const sh = S.sheet, tx = ($('#t_tx') || {}).value.trim(); sh.tx = tx;
+  if (tx.length < 2) { sh.err = 'Escribe algo para publicar'; return render(); }
+  const men = mentionsIn(tx), bg = sh.bg && tx.length <= TBG_MAX ? sh.bg : 0;
+  S.busy = true; render();
+  try {
+    const ref = await addDoc(C('posts'), { kind: 'texto', by: S.me.id, tx, men, bg, at: serverTimestamp(), likedBy: {} });
+    S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast('Publicado ✨');
+    avisar(men.map(to => ({ to, type: 'mention', post: ref.id, tx })));
+  } catch (e) { console.error(e); S.busy = false; sh.err = 'No se pudo publicar'; render(); }
+}
+const composerBar = () => canPost() ? `<div class="composer">${av(S.me)}<button class="cpin" data-crear2="texto">¿Qué quieres contarle al equipo, ${esc(first(S.me.n))}?</button>${['encargada', 'jefe', 'admin', 'sistemas'].includes(role()) ? `<button class="cpic" data-crear2="foto" title="Foto">${ico('camera')}</button>` : ''}</div>` : '';
+
+// ---- Avisos al celular (Firebase Cloud Messaging) ----
+const PUSH_OK = () => !EMU && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const STANDALONE = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const pushState = () => IOS && !STANDALONE() && !('PushManager' in window) ? 'ios' : !PUSH_OK() ? 'no' : Notification.permission;
+let MSG = null;
+async function pushToken(ask) {
+  if (!PUSH_OK()) return false;
+  try {
+    if (!(await msgSupported())) return false;
+    let perm = Notification.permission;
+    if (perm === 'default' && ask) perm = await Notification.requestPermission();
+    if (perm !== 'granted') return false;
+    const reg = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready;
+    MSG = MSG || getMessaging(app);
+    const tk = await getToken(MSG, { serviceWorkerRegistration: reg });
+    if (!tk) return false;
+    const key = 'rp_tk_' + S.me.id, day = nowParts().day;
+    let old = ''; try { old = localStorage.getItem(key) || ''; } catch (e) { }
+    if (old !== tk + '|' + day) { await setDoc(D('privado', S.me.id), { tk: { [tk]: Date.now() }, n: S.me.n }, { merge: true }); try { localStorage.setItem(key, tk + '|' + day); } catch (e) { } }
+    S._tk = tk; return true;
+  } catch (e) { console.error('push', e); return false; }
+}
+async function pushForget() {
+  try { const key = 'rp_tk_' + S.me.id, tk = S._tk || (localStorage.getItem(key) || '').split('|')[0]; if (tk) await updateDoc(D('privado', S.me.id), new FieldPath('tk', tk), deleteField()); localStorage.removeItem(key); } catch (e) { }
+}
+const pushLater = () => { try { return +localStorage.getItem('rp_pushno') > Date.now(); } catch (e) { return false; } };
+function pushCard(inBell) {
+  const s = pushState();
+  if (s === 'granted' || s === 'no' || s === 'denied' && !inBell || (!inBell && pushLater())) return '';
+  if (s === 'ios') return `<div class="pushc"><span>📲</span><div><b>Recibe los avisos en tu iPhone</b><small>Primero agrega Rosita a tu pantalla de inicio: toca <b>Compartir</b> ⬆️ y luego <b>Agregar a inicio</b>. Ábrela desde ahí y activa los avisos.</small></div>${inBell ? '' : '<button class="pcx" data-pushno>✕</button>'}</div>`;
+  if (s === 'denied') return `<div class="pushc off"><span>🔕</span><div><b>Los avisos están bloqueados</b><small>Actívalos en los ajustes del navegador para este sitio.</small></div></div>`;
+  return `<div class="pushc"><span>🔔</span><div><b>Activa los avisos</b><small>Entérate de comentarios, menciones y anuncios aunque la app esté cerrada.</small><button class="pbtn" data-pushon>Activar avisos</button></div>${inBell ? '' : '<button class="pcx" data-pushno>✕</button>'}</div>`;
+}
+// Abre lo que se tocó en un aviso (enlace ?p=publicación&c=1 o ?b=1)
+function handleDeep() {
+  const d = S.deep; if (!d || S.phase !== 'app') return;
+  if (d.b) { S.deep = null; cleanUrl(); return openBell(); }
+  if (!d.p) { S.deep = null; return; }
+  if (!S.posts.find(x => x.id === d.p)) { if (S.posts.length && (d.tries = (d.tries || 0) + 1) > 3) S.deep = null; return; }
+  S.deep = null; cleanUrl(); d.c ? openComs(d.p) : goPost(d.p);
+}
+const cleanUrl = () => { try { history.replaceState(null, '', location.pathname); } catch (e) { } };
+
 function postCard(it) {
   const u = S.me, p = dirP(it.by), mine = rxOf((it.likedBy || {})[u.id]), { n, top } = rxSummary(it), open = S.rxOpen === it.id;
+  const nc = Math.max(0, it.nc || 0), ns = Object.keys(it.seen || {}).filter(sid => sid !== it.by).length, lc = it.lastC;
   let body = '', badge = '';
   if (it.kind === 'anuncio') {
     badge = `<span class="rt ${it.aud && it.aud !== 'all' ? 'enc' : 'jef'}">📣 ${it.aud && it.aud !== 'all' ? esc(storeN(it.aud)) : 'Toda la empresa'}</span>`;
-    body = it.tx.length <= 120 ? `<div class="pimg fbstat fb${(it.id.charCodeAt(0)) % 3}"><div>${nl(it.tx)}</div></div>` : `<div class="ptx pcap">${nl(it.tx)}</div>`;
+    body = it.tx.length <= 120 ? `<div class="pimg fbstat fb${(it.id.charCodeAt(0)) % 3}"><div>${richTx(it.tx, it.men)}</div></div>` : `<div class="ptx pcap">${richTx(it.tx, it.men)}</div>`;
   }
   if (it.kind === 'reco') {
     const c = RCATS.find(x => x[0] === it.cat) || RCATS[0], t = dirP(it.to); badge = '<span class="rt reco">👏 Reconocimiento</span>';
@@ -458,13 +716,16 @@ function postCard(it) {
     body = `<div class="news"><div class="nbar"><span class="live">${gan ? '🏆 ESPECIAL' : '⚡ ÚLTIMA HORA'}</span><b>ROSITA NOTICIAS</b></div>
       <div class="nlead"><span>${esc(it.icon || '🏆')}</span><h3>${esc(it.title || '')}</h3>${it.tx ? `<p>${nl(it.tx)}</p>` : ''}</div></div>`;
   }
+  if (it.kind === 'texto') body = it.bg && it.tx.length <= TBG_MAX ? `<div class="pimg fbstat tb${it.bg}"><div>${richTx(it.tx, it.men)}</div></div>` : `<div class="ptx pcap tpost">${richTx(it.tx, it.men)}</div>`;
   if (it.kind === 'foto') { badge = `<span class="rt auto">${esc(it.tag || '📷')}</span>`; body = `<div class="pfoto"><img src="${it.img}" alt="" loading="lazy"></div><div class="pcap" style="padding-top:8px"><b>${esc(first(p.n))}</b> ${nl(it.tx || '')}</div>`; }
   const sub = it.kind === 'foto' ? (it.store === 'fuera' ? `📍 ${esc(it.lugar || 'Otra actividad')}` : `${esc(storeN(it.store))} · ${esc((S.stores[it.store] || {}).city || '')}`) : `${esc(p.puesto || '')}`;
-  const head = it.kind === 'auto' ? `<div class="logo"><span class="rlmark"></span></div><div class="pw"><b>Rosita</b><small>${it.src === 'arena' ? "Arena D'La Rossa" : 'Rosita Personal'}</small></div>` : `${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div>`;
+  const head = it.kind === 'auto' ? `<div class="logo"><span class="rlmark"></span></div><div class="pw"><b>Rosita</b><small>${it.src === 'arena' ? "Arena D'La Rossa" : 'Rosita Personal'}</small></div>` : `<button class="phx" data-prof="${it.by}">${av(p)}<div class="pw"><b>${it.by === u.id ? 'Tú' : esc(p.n)}</b><small>${sub}</small></div></button>`;
   return `<article class="post" data-post="${it.id}"><div class="ph2">${head}${badge}${(it.by === u.id || isAdmin()) ? `<button class="pdots" data-pdel="${it.id}" title="Borrar">${ico('dots')}</button>` : ''}</div>${body}
   <div class="pact rxwrap">${open ? `<div class="rxbar">${RX.map(([e, l]) => `<button data-rxe="${e}" data-rxp="${it.id}" class="${mine === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>` : ''}
-    <button type="button" data-rx="${it.id}" class="rxbtn ${mine ? 'on' : ''}">${mine ? `<span class="rxe">${mine}</span>${(RX.find(x => x[0] === mine) || [0, 'Reaccionaste'])[1]}` : `${ico('heart')}Reaccionar`}</button></div>
-  <div class="pmeta">${n ? `<b class="rxsum"><span>${top.join('')}</span> ${n === 1 && mine ? 'Tú' : mine ? `Tú y ${n - 1} más` : n}</b>` : '<span class="first">Reacciona primero</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
+    <button type="button" data-rx="${it.id}" class="rxbtn ${mine ? 'on' : ''}">${mine ? `<span class="rxe">${mine}</span>${(RX.find(x => x[0] === mine) || [0, 'Reaccionaste'])[1]}` : `${ico('heart')}Reaccionar`}</button><button type="button" data-com="${it.id}" data-cf="1" class="rxbtn cbtn">${ico('comment')}Comentar</button></div>
+  <div class="pmeta"><span class="pml">${n ? `<b class="rxsum"><span>${top.join('')}</span> ${n === 1 && mine ? 'Tú' : mine ? `Tú y ${n - 1} más` : n}</b>` : '<span class="first">Reacciona primero</span>'}${it.claps ? `<span> · 👏 ${it.claps}</span>` : ''}</span>
+    <span class="pmr">${nc ? `<button class="mlink" data-com="${it.id}">${nc} ${nc === 1 ? 'comentario' : 'comentarios'}</button>` : ''}${ns ? `<button class="mlink" data-seen="${it.id}">👁️ Visto por ${ns}</button>` : ''}</span>
+    ${lc && nc ? `<button class="cprev" data-com="${it.id}">${nc > 1 ? `<span class="cmore">Ver los ${nc} comentarios</span>` : ''}<span class="cline"><b>${esc(lc.by === u.id ? 'Tú' : handle(lc.by))}</b> ${esc(lc.tx)}</span></button>` : ''}<small>${ago(tsMs(it.at)).toUpperCase()}</small></div></article>`;
 }
 function llegadasCard() {
   const u = S.me, arr = (S.today || {}).arr || {};
@@ -482,13 +743,15 @@ function viewInicio() {
   const u = S.me;
   let h = notesRow() + `<div class="hwrap">${heroCard()}</div>` + rachaCard();
   if (!S.me.photo) h += `<label class="phnudge"><span>${ico('camera')}</span><div><b>Agrega tu foto de perfil</b> para que te reconozcan</div><em>Agregar</em><input type="file" accept="image/*" data-photo hidden></label>`;
+  h += pushCard(false);
   h += tiendaHoy();
   h += `<div class="sec"><div class="sech"><b>Novedades</b>${canPost() ? `<button class="pubbtn" data-crear>${ico('plus')} Crear</button>` : ''}</div>
     <div class="scope"><button data-scope="todo" class="${S.scope !== 'tienda' ? 'on' : ''}">Todo D'La Rossa</button><button data-scope="tienda" class="${S.scope === 'tienda' ? 'on' : ''}">${esc(storeN(u.store))}</button></div></div>`;
+  h += composerBar();
   h += birthdayCards();
   const items = S.posts.filter(it => {
     if (it.kind === 'anuncio' && it.aud && it.aud !== 'all' && it.aud !== u.store && !isMgr() && it.by !== u.id) return false;
-    if (S.scope === 'tienda') { if (it.kind === 'foto') return it.store === u.store; if (it.kind === 'reco') return (P(it.to) || {}).store === u.store; if (it.kind === 'anuncio') return it.aud === u.store; if (it.kind === 'auto') return !it.tienda || sameN(it.tienda, storeN(u.store)); }
+    if (S.scope === 'tienda') { if (it.kind === 'foto') return it.store === u.store; if (it.kind === 'reco') return (P(it.to) || {}).store === u.store; if (it.kind === 'anuncio') return it.aud === u.store; if (it.kind === 'texto') return (P(it.by) || {}).store === u.store; if (it.kind === 'auto') return !it.tienda || sameN(it.tienda, storeN(u.store)); }
     return true;
   });
   const arr = llegadasCard(); let placed = false;
@@ -526,6 +789,8 @@ function viewPerfil() {
     ${bioOf(u.id) ? `<button class="bio" data-bio>“${esc(bioOf(u.id))}”</button>` : `<button class="bio add" data-bio>＋ Agrega una frase</button>`}<label class="chgph">${u.photo ? 'Cambiar foto' : 'Agregar foto de perfil'}<input type="file" accept="image/*" data-photo hidden></label></div>
     ${recos.length ? `<div class="h3">Reconocimientos</div><div class="hl">${Object.entries(cnt).map(([k, n]) => { const c = RCATS.find(x => x[0] === k) || RCATS[0]; return `<div><div class="hlc">${c[1]}${n > 1 ? `<i>${n}</i>` : ''}</div><span>${c[2]}</span></div>`; }).join('')}</div>` : ''}
     ${isSup() || !inRacha(u) ? '' : badgeGrid(u.id)}
+    <div class="h3">Avisos al celular</div>${pushState() === 'granted' ? '<div class="note" style="margin-top:0">🔔 Activados en este celular. Te avisamos de comentarios, menciones, reconocimientos, anuncios y Rosita Noticias.</div>' : pushCard(true) || '<div class="note" style="margin-top:0">Este navegador no permite avisos.</div>'}
+    <button class="wide ghost" data-prof="${u.id}" style="margin-top:8px">Ver mi perfil como lo ven los demás</button>
     <div class="h3">Cuenta</div>
     <button class="wide ghost" data-pinchg>Cambiar mi PIN</button>
     <button class="wide ghost" data-logout style="margin-top:8px">Cerrar sesión</button>
@@ -628,6 +893,11 @@ const sheetWrap = (inner, cls = '') => `<div class="sheet-bg" data-bgclose><div 
 const opt = (v, l, sel) => `<option value="${esc(v)}" ${String(sel) === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
 function sheetHtml() {
   const sh = S.sheet; if (!sh) return '';
+  if (sh.kind === 'coms') return comsSheet(sh);
+  if (sh.kind === 'avisos') return bellSheet(sh);
+  if (sh.kind === 'seen') return seenSheet(sh);
+  if (sh.kind === 'perfil') return profSheet(sh);
+  if (sh.kind === 'texto') return textoSheet(sh);
   if (sh.kind === 'about') return sheetWrap(`<img class="r" src="rosita.svg" alt=""><div class="awm"><img class="rlwm" src="wordmark-dark.svg" alt="rosita labs" style="width:160px;height:auto"></div><div class="app">Personal</div>
     <div class="rows"><div class="row"><span>Versión</span><span>${VERSION}</span></div><div class="row"><span>Para</span><span>Textiles D'La Rossa</span></div><div class="row"><span>Hecho por</span><span>Rosita Labs</span></div></div><div class="made">Hecho en Quetzaltenango, Guatemala</div><button class="aclose" data-close>Cerrar</button>`, 'about');
   if (sh.kind === 'user') return userSheet(sh);
@@ -644,13 +914,13 @@ function sheetHtml() {
     ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-pinsave ${S.busy ? 'disabled' : ''}>Guardar</button><button class="wide ghost" data-close>Cancelar</button>`);
   if (sh.kind === 'crear') {
     const op = (k, ic, t, s) => `<button class="crow" data-crear2="${k}"><span>${ic}</span><div><b>${t}</b><small>${s}</small></div></button>`;
-    return sheetWrap(`<h4>Crear</h4><div class="sub">¿Qué quieres compartir con el equipo?</div>${['encargada', 'jefe', 'admin', 'sistemas'].includes(role()) ? op('foto', '📷', 'Foto de la tienda', 'Vitrina, producto nuevo, tienda lista') : ''}${['encargada', 'jefe', 'admin', 'fundador', 'sistemas'].includes(role()) ? op('reco', '👏', 'Reconocer a alguien', role() === 'encargada' ? 'A alguien de tu tienda' : 'A cualquier persona') : ''}${op('anuncio', '📣', 'Anuncio', role() === 'encargada' ? 'Para tu tienda' : 'Para la empresa o una tienda')}<button class="wide ghost" data-close style="margin-top:6px">Cancelar</button>`);
+    return sheetWrap(`<h4>Crear</h4><div class="sub">¿Qué quieres compartir con el equipo?</div>${op('texto', '✍️', 'Publicación', 'Escribe algo · menciona con @')}${['encargada', 'jefe', 'admin', 'sistemas'].includes(role()) ? op('foto', '📷', 'Foto de la tienda', 'Vitrina, producto nuevo, tienda lista') : ''}${['encargada', 'jefe', 'admin', 'fundador', 'sistemas'].includes(role()) ? op('reco', '👏', 'Reconocer a alguien', role() === 'encargada' ? 'A alguien de tu tienda' : 'A cualquier persona') : ''}${op('anuncio', '📣', 'Anuncio', role() === 'encargada' ? 'Para tu tienda' : 'Para la empresa o una tienda')}<button class="wide ghost" data-close style="margin-top:6px">Cancelar</button>`);
   }
   if (sh.kind === 'anuncio') {
     const enc = role() === 'encargada';
     return sheetWrap(`<h4>📣 Nuevo anuncio</h4><div class="sub">${enc ? `Lo ve el personal de <b>${esc(storeN(S.me.store))}</b>` : 'Elige quién lo ve'}</div>
     ${enc ? '' : `<select id="a_aud" class="fin">${opt('all', 'Toda la empresa', sh.aud)}${Object.values(S.stores).map(s => opt(s.id, 'Solo ' + s.n, sh.aud)).join('')}</select>`}
-    <textarea id="a_tx" class="fin" rows="4" placeholder="Ej.: Mañana inventario general a las 7:00">${esc(sh.tx || '')}</textarea>${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-apub ${S.busy ? 'disabled' : ''}>Publicar</button><button class="wide ghost" data-close>Cancelar</button>`);
+    ${menBox(`<textarea id="a_tx" class="fin" rows="4" data-men placeholder="Ej.: Mañana inventario general a las 7:00">${esc(sh.tx || '')}</textarea>`)}${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-apub ${S.busy ? 'disabled' : ''}>Publicar</button><button class="wide ghost" data-close>Cancelar</button>`);
   }
   if (sh.kind === 'foto') return sheetWrap(`<h4>Nueva foto</h4><div class="sub">La ve todo D'La Rossa</div>
     <label class="fpick">${sh.img ? `<img src="${sh.img}">` : `<span>${ico('camera')}</span><b>Tomar o elegir foto</b><small>Vitrina, producto, la tienda lista</small>`}<input type="file" accept="image/*" data-fotoimg hidden></label>
@@ -690,7 +960,7 @@ function sheetHtml() {
     return sheetWrap(`<div style="text-align:center"><div class="npreview"><div class="nbub big"><p>${esc(n.tx)}</p></div>${av(p)}</div><b style="font-size:16px">${esc(p.n)}</b><div class="sub" style="margin-top:2px">${esc(p.puesto || '')}${isSup(p) ? '' : ` · ${esc(storeN(p.store))}`} · ${ago(tsMs(n.at))}</div>${n.bio ? `<div class="biov">“${esc(n.bio)}”</div>` : ''}
     <div class="nrxbar">${RX.map(([e, l]) => `<button data-nrx="${e}" class="${(n.rx || {})[S.me.id] === e ? 'on' : ''}" title="${l}">${e}</button>`).join('')}</div>
     ${Object.keys(n.rx || {}).length ? `<div class="sub" style="margin:2px 0 0">${Object.keys(n.rx).length} ${Object.keys(n.rx).length === 1 ? 'reacción' : 'reacciones'}</div>` : ''}
-    ${isMgr() ? '<button class="peek" data-nhide style="color:var(--warn)">Ocultar esta nota</button>' : ''}<button class="wide ghost" data-close>Cerrar</button></div>`);
+    <button class="peek" data-prof="${sh.id}">Ver perfil</button>${isMgr() ? '<button class="peek" data-nhide style="color:var(--warn)">Ocultar esta nota</button>' : ''}<button class="wide ghost" data-close>Cerrar</button></div>`);
   }
   return '';
 }
@@ -803,18 +1073,21 @@ function render() {
   if (S.phase === 'error') { root.innerHTML = `<div class="body" style="padding:40px 20px;text-align:center"><img src="rosita.svg" style="width:80px"><p>${esc(S.err)}</p><button class="wide" onclick="location.reload()">Reintentar</button></div>`; return; }
   if (S.phase === 'setup') { root.innerHTML = viewSetup() + sheetHtml(); return; }
   if (S.phase === 'login') { root.innerHTML = viewLogin() + sheetHtml(); if (S.q) filterWho(); return; }
-  const t = S.tab, gt = gestionTabs().length;
+  if (comUnsub && !(S.sheet && S.sheet.kind === 'coms')) { comUnsub(); comUnsub = null; }
+  const t = S.tab, gt = gestionTabs().length, bc = bellCount();
   const title = { inicio: '', marcar: 'Marcar', equipo: gt ? 'Gestión' : 'Mi tienda', perfil: 'Perfil' }[t];
   const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)).length;
   const body = { inicio: viewInicio, marcar: viewMarcar, equipo: viewGestion, perfil: viewPerfil }[t]();
   // Conserva la posición de la pantalla en cada actualización (reacciones, datos en vivo, reloj); solo vuelve arriba al cambiar de pestaña
   const sc = $('.sbody') ? $('.sbody').scrollTop : 0, keep = S._keepScroll || S._lastTab === t; S._keepScroll = false; S._lastTab = t;
-  root.innerHTML = `<div class="topbar">${t === 'inicio' ? `<div class="wordmark"><span class="rlmark"></span><span>rosita</span></div>` : `<div class="ttl">${title}</div>`}<div class="sp"></div>${pend ? `<button class="tbi" data-tab="equipo">${ico('heart')}<i>${pend}</i></button>` : ''}</div>
+  root.innerHTML = `<div class="topbar">${t === 'inicio' ? `<div class="wordmark"><span class="rlmark"></span><span>rosita</span></div>` : `<div class="ttl">${title}</div>`}<div class="sp"></div>${pend ? `<button class="tbi" data-tab="equipo">${ico('cal')}<i>${pend}</i></button>` : ''}<button class="tbi" data-bell title="Notificaciones">${ico('bell')}${bc ? `<i>${bc > 9 ? '9+' : bc}</i>` : ''}</button></div>
   <div class="body sbody">${body}</div>
   <nav class="bnav"><button data-tab="inicio" class="${t === 'inicio' ? 'on' : ''}">${ico('home')}</button><button data-tab="equipo" class="${t === 'equipo' ? 'on' : ''}">${ico('users')}${pend ? `<i>${pend}</i>` : ''}</button>
   ${isSup() ? `<button data-crear class="mark">${ico('plus')}</button>` : `<button data-tab="marcar" class="mark ${['trabajando', 'extra'].includes(myState()) ? 'working' : ''}">${ico(myState() === 'fuera' ? 'in' : myState() === 'salio' ? 'check' : 'clock')}</button>`}
   <button data-tab="perfil" class="pfnav ${t === 'perfil' ? 'on' : ''}">${av(S.me)}</button></nav>` + sheetHtml();
   if (keep && $('.sbody')) $('.sbody').scrollTop = sc;
+  if (!S.sheet) observeSeen();
+  appBadge();
 }
 
 /* ================== ACCIONES ================== */
@@ -998,7 +1271,7 @@ document.addEventListener('click', async e => {
   if (d.avok !== undefined) { const v = ($('#av_tx') || {}).value || ''; S.sheet = null; return doMark('salida', v.trim() || ' '); }
   if (d.xyes !== undefined) { S.sheet = null; return doMark('extra'); }
   if (d.xno !== undefined) { S.sheet = null; return doMark('entrada', true); }
-  if (d.logout !== undefined) { stopListeners(); await signOut(auth); S.tab = 'inicio'; return; }
+  if (d.logout !== undefined) { await pushForget(); stopListeners(); await signOut(auth); S.tab = 'inicio'; return; }
   if (d.pinchg !== undefined) { S.sheet = { kind: 'pin' }; render(); return; }
   if (d.pinsave !== undefined) {
     const o = $('#p_old').value, n = $('#p_new').value, n2 = $('#p_new2').value;
@@ -1046,13 +1319,35 @@ document.addEventListener('click', async e => {
   if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; sh.medio = d.pdur || null; render(); return; }
   if (d.psave !== undefined) return savePermiso();
   if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Aprobado' : 'Rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
+  // red social
+  if (d.bell !== undefined) return openBell();
+  if (d.bopen) return bellOpen(d.bopen);
+  if (d.com) return openComs(d.com, !!d.cf);
+  if (d.csend !== undefined) return sendCom();
+  if (d.creply) { const el = $('#c_tx'); if (el) { const tag = '@' + handle(d.creply) + ' '; if (!el.value.startsWith(tag)) el.value = tag + el.value; el.focus(); el.setSelectionRange(el.value.length, el.value.length); } return; }
+  if (d.cdel) { if (!confirmDel()) return; return delCom(d.cdel); }
+  if (d.seen) { S.sheet = { kind: 'seen', id: d.seen }; render(); return; }
+  if (d.prof) return openProf(d.prof);
+  if (d.pback !== undefined) { const b = S.sheet && S.sheet.back; if (b && b.kind === 'coms') return openComs(b.id); S.sheet = b || null; render(); return; }
+  if (d.gopost) return goPost(d.gopost);
+  if (d.preco) { S.sheet = { kind: 'reco', cat: 'atencion', to: d.preco }; render(); return; }
+  if (d.menpick) {
+    const m = S._men; if (!m || !document.body.contains(m.el)) return; const el = m.el, ins = '@' + handle(d.menpick) + ' ';
+    el.value = el.value.slice(0, m.at) + ins + el.value.slice(m.at + m.len); const pos = m.at + ins.length; el.focus(); el.setSelectionRange(pos, pos);
+    S._men = null; const box = el.parentElement.querySelector('.mensug'); if (box) box.innerHTML = ''; el.dispatchEvent(new Event('input', { bubbles: true })); return;
+  }
+  if (d.tbg !== undefined) { const sh = S.sheet, el = $('#t_tx'); sh.tx = el ? el.value : sh.tx; sh.bg = +d.tbg; render(); setTimeout(() => { const i = $('#t_tx'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 30); return; }
+  if (d.tpub !== undefined) return pubTexto();
+  if (d.pushon !== undefined) { const ok = await pushToken(true); toast(ok ? '🔔 Listo: te avisaremos aunque la app esté cerrada' : (window.Notification && Notification.permission === 'denied') ? 'Los avisos quedaron bloqueados. Actívalos en los ajustes del navegador.' : 'No se pudieron activar los avisos en este celular'); S._keepScroll = true; render(); return; }
+  if (d.pushno !== undefined) { try { localStorage.setItem('rp_pushno', String(Date.now() + 7 * 864e5)); } catch (er) { } S._keepScroll = true; render(); return; }
   // muro
   if (d.crear !== undefined) { S.sheet = { kind: 'crear' }; render(); return; }
+  if (d.crear2 === 'texto') { S.sheet = { kind: 'texto' }; render(); setTimeout(() => { const i = $('#t_tx'); i && i.focus(); }, 60); return; }
   if (d.crear2) { S.sheet = d.crear2 === 'anuncio' ? { kind: 'anuncio', aud: role() === 'encargada' ? S.me.store : 'all' } : d.crear2 === 'foto' ? { kind: 'foto', tag: FTAGS[0], store: S.me.store } : { kind: 'reco', cat: 'atencion' }; render(); return; }
   if (d.apub !== undefined) {
     const tx = $('#a_tx').value.trim(), aud = role() === 'encargada' ? S.me.store : $('#a_aud').value; S.sheet.tx = tx; S.sheet.aud = aud;
     if (tx.length < 4) { S.sheet.err = 'Escribe el anuncio'; return render(); }
-    S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'anuncio', by: S.me.id, tx, aud, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast('Anuncio publicado 📣'); } catch (er) { console.error(er); S.busy = false; S.sheet.err = 'No se pudo publicar'; render(); } return;
+    const men = mentionsIn(tx); S.busy = true; render(); try { const ref = await addDoc(C('posts'), { kind: 'anuncio', by: S.me.id, tx, men, aud, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast('Anuncio publicado 📣'); avisar(men.map(to => ({ to, type: 'mention', post: ref.id, tx }))); } catch (er) { console.error(er); S.busy = false; S.sheet.err = 'No se pudo publicar'; render(); } return;
   }
   if (d.ftag) { readFoto(); S.sheet.tag = d.ftag; render(); if (d.ftag === 'otro') setTimeout(() => { const i = $('#f_tagx'); i && i.focus(); }, 50); return; }
   if (d.fpub !== undefined) {
@@ -1068,14 +1363,14 @@ document.addEventListener('click', async e => {
   if (d.rpub !== undefined) {
     const sh = S.sheet; sh.tx = $('#r_tx').value.trim();
     if (!sh.to) { sh.err = 'Elige a quién reconocer'; return render(); } if (sh.tx.length < 6) { sh.err = 'Cuenta en una frase qué hizo'; return render(); }
-    S.busy = true; render(); try { await addDoc(C('posts'), { kind: 'reco', by: S.me.id, to: sh.to, cat: sh.cat, tx: sh.tx, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast(`👏 Reconociste a ${first(P(sh.to).n)}`); } catch (er) { console.error(er); S.busy = false; sh.err = 'No se pudo publicar'; render(); } return;
+    S.busy = true; render(); try { const ref = await addDoc(C('posts'), { kind: 'reco', by: S.me.id, to: sh.to, cat: sh.cat, tx: sh.tx, at: serverTimestamp(), likedBy: {} }); S.busy = false; S.sheet = null; S.tab = 'inicio'; render(); toast(`👏 Reconociste a ${first(P(sh.to).n)}`); avisar([{ to: sh.to, type: 'reco', post: ref.id, tx: sh.tx }]); } catch (er) { console.error(er); S.busy = false; sh.err = 'No se pudo publicar'; render(); } return;
   }
   if (d.lmore) { S.ligaOpen = S.ligaOpen === d.lmore ? null : d.lmore; repaintPost(d.lmore); return; }
   if (d.rx) { const prev = S.rxOpen; S.rxOpen = prev === d.rx ? null : d.rx; if (prev && prev !== d.rx) repaintPost(prev); repaintPost(d.rx); return; }
   if (d.rxe) { const id = d.rxp, it = S.posts.find(x => x.id === id); if (!it) return;
     const cur = rxOf((it.likedBy || {})[S.me.id]), lb = { ...(it.likedBy || {}) }, off = cur === d.rxe;
     if (off) delete lb[S.me.id]; else lb[S.me.id] = d.rxe; it.likedBy = lb; S.rxOpen = null; repaintPost(id);
-    try { await updateDoc(D('posts', id), { [`likedBy.${S.me.id}`]: off ? deleteField() : d.rxe }); } catch (er) { console.error(er); toast('No se pudo reaccionar. Revisa tu internet.'); }
+    try { await updateDoc(D('posts', id), { [`likedBy.${S.me.id}`]: off ? deleteField() : d.rxe }); if (!off && !cur) avisar([{ to: it.by, type: 'rx', post: id, tx: d.rxe }]); } catch (er) { console.error(er); toast('No se pudo reaccionar. Revisa tu internet.'); }
     return; }
   if (d.like) { const it = S.posts.find(x => x.id === d.like), on = !(it.likedBy || {})[S.me.id]; const lb = { ...(it.likedBy || {}) }; if (on) lb[S.me.id] = true; else delete lb[S.me.id]; it.likedBy = lb; S._keepScroll = true; render(); try { await updateDoc(D('posts', d.like), { likedBy: lb }); } catch (er) { console.error(er); } return; }
   if (d.clap) { const it = S.posts.find(x => x.id === d.clap); it.claps = (it.claps || 0) + 1; S._keepScroll = true; render(); toast('👏 Aplaudiste'); try { await updateDoc(D('posts', d.clap), { claps: it.claps }); } catch (er) { } return; }
@@ -1092,13 +1387,15 @@ document.addEventListener('click', async e => {
     try { await setDoc(D('notes', S.me.id), { bio: v || deleteField() }, { merge: true }); S.notes[S.me.id] = { ...(S.notes[S.me.id] || {}), bio: v }; S.sheet = null; render(); toast(v ? 'Frase guardada ✨' : 'Frase quitada'); } catch (er) { console.error(er); toast('No se pudo guardar'); } return; }
   if (d.ndel !== undefined) { try { await setDoc(D('notes', S.me.id), { tx: deleteField(), at: deleteField(), rx: deleteField() }, { merge: true }); S.sheet = null; render(); } catch (er) { } return; }
   if (d.nhide !== undefined) { try { await deleteDoc(D('notes', S.sheet.id)); S.sheet = null; render(); toast('Nota ocultada'); } catch (er) { toast('No se pudo ocultar'); } return; }
-  if (d.story) { const a = ((S.today || {}).arr || {})[d.story], p = P(d.story); toast(a ? `${first(p.n)} llegó a las ${a.t} ☀️` : `${first(p.n)} todavía no llega`); return; }
+  if (d.story) return openProf(d.story);
 });
 function repaintPost(id) {
   const el = document.querySelector(`article[data-post="${id}"]`), it = S.posts.find(x => x.id === id);
   if (el && it) el.outerHTML = postCard(it);
+  observeSeen();
 }
 // Tocar fuera de la barra de reacciones la cierra
+document.addEventListener('pointerdown', e => { if (e.target.closest('[data-menpick]')) e.preventDefault(); });
 document.addEventListener('pointerdown', e => { if (S.rxOpen && !e.target.closest('.rxwrap')) { const id = S.rxOpen; S.rxOpen = null; repaintPost(id); } });
 function readFoto() { const sh = S.sheet, v = id => $('#' + id) ? $('#' + id).value : undefined; if (v('f_cap') !== undefined) sh.cap = v('f_cap'); if (v('f_st') !== undefined) sh.store = v('f_st'); if (v('f_lugar') !== undefined) sh.lugar = v('f_lugar'); if (v('f_tagx') !== undefined) sh.tagx = v('f_tagx'); }
 // Lee coordenadas escritas o un enlace largo de Google Maps
@@ -1139,8 +1436,12 @@ document.addEventListener('input', e => {
   if (t.id === 'whoq') { S.q = t.value; filterWho(); }
   if (t.id === 'n_tx') { $('#ncount').textContent = t.value.length + '/60'; $('#nprev').textContent = t.value || '¿Qué está pasando?'; S.sheet.tx = t.value; }
   if (t.classList.contains('pinin')) t.value = t.value.replace(/\D/g, '').slice(0, 4);
+  if (t.dataset && t.dataset.men !== undefined) menSuggest(t);
+  if (t.id === 'c_tx') { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; }
+  if (t.id === 't_tx' && S.sheet) { const sh = S.sheet, big = sh.bg && t.value.length <= TBG_MAX; sh.tx = t.value; t.className = `fin ttx ${big ? 'tbg tb' + sh.bg : ''}`; const hh = $('#tbgh'); if (hh) hh.textContent = sh.bg && !big ? 'El fondo de color es para textos cortos' : ''; }
   if (t.id === 'u_r') { const r = ROLES[t.value]; $('#u_rd').textContent = r ? r.d : ''; }
 });
+document.addEventListener('keydown', e => { if (e.target.id === 'c_tx' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendCom(); } });
 document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'u_s') { const h = $('#u_h'); if (h) h.value = suggestHor(t.value); }
@@ -1159,5 +1460,8 @@ document.addEventListener('change', async e => {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) rerender(); });
 setInterval(() => { rerender(); checkBadges(); }, 60000);
 if ('serviceWorker' in navigator && !EMU) navigator.serviceWorker.register('sw.js').catch(() => { });
+// Enlaces de los avisos: ?p=publicación (&c=1 abre los comentarios) o ?b=1 (campanita)
+(() => { const q = new URLSearchParams(location.search); if (q.get('p') || q.get('b')) S.deep = { p: q.get('p'), c: q.get('c') === '1', b: q.get('b') === '1' }; })();
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { const o = e.data && e.data.open; if (o) { S.deep = { p: o.p, c: o.c === '1', b: o.b === '1' }; handleDeep(); } });
 window.__S = S;
 boot();

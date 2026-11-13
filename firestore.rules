@@ -78,13 +78,45 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Muro: anuncios, reconocimientos y fotos
+    // Muro: publicaciones de texto, anuncios, reconocimientos y fotos
     match /posts/{id} {
       allow read: if hasMe();
       allow create: if canPost() && request.resource.data.by == me().sid
-        && request.resource.data.kind in ['anuncio', 'reco', 'foto'];
-      allow update: if hasMe() && onlyKeys(['likedBy', 'claps']);
+        && request.resource.data.kind in ['anuncio', 'reco', 'foto', 'texto'];
+      // Cualquiera reacciona, comenta (contador y último comentario) y marca "visto" solo con su propio nombre
+      allow update: if hasMe() && onlyKeys(['likedBy', 'claps', 'seen', 'nc', 'lastC'])
+        && request.resource.data.get('seen', {}).diff(resource.data.get('seen', {})).affectedKeys().hasOnly([me().sid])
+        && request.resource.data.get('nc', 0) - resource.data.get('nc', 0) in [-1, 0, 1];
       allow delete: if isAdmin() || (hasMe() && resource.data.by == me().sid);
+
+      // Comentarios: todo el equipo comenta (también las asesoras); cada quien borra los suyos
+      match /comments/{cid} {
+        allow read: if hasMe();
+        allow create: if hasMe() && request.resource.data.by == me().sid
+          && request.resource.data.tx is string && request.resource.data.tx.size() > 0 && request.resource.data.tx.size() <= 500;
+        allow delete: if isAdmin() || (hasMe() && resource.data.by == me().sid);
+      }
+    }
+
+    // Notificaciones de la campanita: cada quien solo ve las suyas y solo puede marcarlas como leídas
+    match /avisos/{id} {
+      allow read: if hasMe() && resource.data.to == me().sid;
+      allow create: if hasMe() && request.resource.data.from == me().sid && request.resource.data.to != me().sid
+        && request.resource.data.keys().hasOnly(['to', 'from', 'type', 'post', 'c', 'tx', 'at', 'read', 'sent'])
+        && request.resource.data.type in ['comment', 'reply', 'mention', 'reco', 'rx']
+        && request.resource.data.tx is string && request.resource.data.tx.size() <= 140;
+      allow update: if hasMe() && resource.data.to == me().sid && onlyKeys(['read']);
+      allow delete: if hasMe() && resource.data.to == me().sid;
+    }
+
+    // Datos privados de cada persona (celulares registrados para recibir avisos)
+    match /privado/{sid} {
+      allow read, write: if hasMe() && me().sid == sid;
+    }
+
+    // Estado del envío de avisos (lo maneja solo el servidor)
+    match /meta/push {
+      allow read, write: if false;
     }
 
     // Resultados de la Arena D'La Rossa (sin quetzales): los escribe solo el puente automático de la Arena

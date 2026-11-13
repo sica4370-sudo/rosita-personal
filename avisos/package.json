@@ -1,0 +1,9 @@
+{
+  "name": "rosita-avisos",
+  "private": true,
+  "description": "Envía los avisos al celular de Rosita Personal (lo ejecuta GitHub Actions cada 5 minutos).",
+  "main": "enviar.js",
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}

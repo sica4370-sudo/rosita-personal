@@ -63,3 +63,13 @@ La app se publica sola en **GitHub Pages** (`.github/workflows/pages.yml`) cada 
 https://sica4370-sudo.github.io/rosita-personal/
 
 Las reglas de Firestore (`firestore.rules`) se publican desde la consola de Firebase → Firestore → Reglas, o con `npm run deploy`. El flujo `firebase-deploy.yml` (Firebase Hosting) queda como opción manual.
+
+## Red social y avisos al celular
+
+- **Comentarios** (`posts/{id}/comments`), **menciones con @**, **publicaciones de texto** con fondo de color, **visto por** (`posts/{id}.seen`), **campanita** (`avisos`) y **perfil** de cada persona.
+- **Avisos al celular**: cada quien los activa desde la app (Inicio o Perfil). El celular queda guardado en `privado/{persona}`.
+  En iPhone primero hay que agregar Rosita a la pantalla de inicio.
+- El envío lo hace `avisos/enviar.js`, que corre en GitHub Actions cada 5 minutos (`.github/workflows/avisos.yml`), de 6:00 a. m. a 10:55 p. m.
+  Necesita el secreto **`ROSITA_SERVICE_ACCOUNT`**: Firebase → Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada,
+  y pegar todo el contenido del `.json` en GitHub → Settings → Secrets and variables → Actions → New repository secret.
+- Se avisa de: comentarios en tus publicaciones, respuestas, menciones, reconocimientos, anuncios (a quien van dirigidos), Rosita Noticias y cumpleaños.

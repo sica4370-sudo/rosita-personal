@@ -1,0 +1,30 @@
+# Envía los avisos al celular de Rosita Personal cada 5 minutos, de 6:00 a. m. a 10:55 p. m. (Guatemala = UTC-6).
+# Necesita el secreto ROSITA_SERVICE_ACCOUNT. El repositorio es público, así que estos minutos de GitHub no se cobran.
+name: Avisos al celular
+on:
+  schedule:
+    - cron: '*/5 12-23 * * *'
+    - cron: '*/5 0-4 * * *'
+  workflow_dispatch:
+concurrency:
+  group: avisos
+  cancel-in-progress: false
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: avisos
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: avisos/package-lock.json
+      - run: npm ci --omit=dev --no-audit --no-fund
+        working-directory: avisos
+      - run: node enviar.js
+        working-directory: avisos
+        env:
+          ROSITA_SERVICE_ACCOUNT: ${{ secrets.ROSITA_SERVICE_ACCOUNT }}
