@@ -780,6 +780,7 @@ const cambioTxt = c => c.tipo === 'permiso'
   ? `📝 Permiso <b>${niceDate(c.rest)}</b> · ${c.medio ? MEDIO_L[c.medio] : 'día completo'} · se descuenta`
   : `Descansa <b>${niceDate(c.rest)}</b> · trabaja <b>${niceDate(c.work)}</b>`;
 const chipC = c => c.estado === 'pendiente' ? '<span class="st y">Pendiente</span>' : c.estado === 'aprobado' ? `<span class="st g">✓ Aprobado</span>` : '<span class="st p" style="color:var(--warn)">✕ Rechazado</span>';
+const decTxt = c => { if (c.estado === 'pendiente' || !c.decidedBy) return ''; const d = dirP(c.decidedBy); return ` · ${c.estado === 'aprobado' ? 'aprobó' : 'rechazó'} ${esc(first(d.n || '?'))}${c.decidedBy === c.sid ? ' (a sí mismo/a)' : ''}`; };
 function viewPerfil() {
   const u = S.me, hor = myHor(), recos = S.posts.filter(x => x.kind === 'reco' && x.to === u.id);
   const cnt = {}; recos.forEach(r => cnt[r.cat] = (cnt[r.cat] || 0) + 1);
@@ -875,7 +876,10 @@ function viewStores() {
   return `<div class="note" style="margin:0 0 12px">Para verificar que la gente marque desde su tienda, guarda la <b>ubicación de cada tienda</b>: ve a la tienda, abre aquí la tienda y toca <b>Usar mi ubicación actual</b>.</div>` +
     st.map(s => `<button class="urow" data-sedit="${s.id}"><div class="hic">${ico('store')}</div><div style="flex:1"><b>${esc(s.n)}</b><small>${esc(s.city || '')}${s.mall ? ' · centro comercial' : ''} · ${s.lat ? `📍 ubicación guardada (${s.radius || 150} m)` : '<span style="color:var(--amber)">sin ubicación</span>'}</small></div>${ico('edit')}</button>`).join('') + `<button class="wide ghost" data-snew style="margin-top:12px">＋ Nueva tienda</button>`;
 }
-const canDecide = c => isAdmin() || (role() === 'jefe' && S.me.dept === c.dept && c.sid !== S.me.id);
+// Quién puede dar o aprobar permisos/descansos de una persona: Gerencia a cualquiera (menos a sí misma);
+// un jefe solo a la gente de su departamento que no sea jefe, y nunca a sí mismo.
+const canGrant = sid => { const p = S.staff[sid] || {}; if (!S.me || sid === S.me.id) return false; if (isAdmin()) return true; return role() === 'jefe' && p.dept === S.me.dept && !['jefe', 'admin', 'fundador'].includes(p.role); };
+const canDecide = c => canGrant(c.sid);
 function viewCambios() {
   const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)), rest = S.cambios.filter(c => c.estado !== 'pendiente').sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 20);
   let h = `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="wide" data-cnew2 style="margin:0;flex:1">${ico('swap')} Mover descanso</button><button class="wide ghost" data-pnew2 style="margin:0;flex:1">${ico('cal')} Dar permiso</button></div><div class="note" style="margin:0 0 12px">Cuando alguien necesita faltar, hay dos caminos: <b>mover su descanso</b> (descansa ese día y trabaja otro, sin descuento) o darle un <b>permiso</b> de día completo o medio día, que <b>se descuenta</b>.</div>`;
@@ -885,7 +889,7 @@ function viewCambios() {
 }
 function cambioRow(c, act) {
   const p = dirP(c.sid);
-  return `<div class="crowc">${av(p)}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${cambioTxt(c)}${c.mot ? ` · “${esc(c.mot)}”` : ''}</small></div>${act ? `<div class="paybtns"><button data-cok="${c.id}">✓</button><button data-cno="${c.id}" style="color:var(--warn)">✕</button></div>` : chipC(c)}</div>`;
+  return `<div class="crowc">${av(p)}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${cambioTxt(c)}${c.mot ? ` · “${esc(c.mot)}”` : ''}${act ? '' : decTxt(c)}</small></div>${act ? `<div class="paybtns"><button data-cok="${c.id}">✓</button><button data-cno="${c.id}" style="color:var(--warn)">✕</button></div>` : chipC(c)}</div>`;
 }
 
 /* ===== HOJAS (bottom sheets) ===== */
@@ -1024,7 +1028,7 @@ function cambioSheet(sh) {
   const forOther = sh.other, today = nowParts().day;
   const who = forOther ? (sh.sid ? S.staff[sh.sid] : null) : S.me;
   const days = []; for (let i = 0; i < 21; i++) days.push(addDays(today, i));
-  const pool = forOther ? Object.values(S.staff).filter(p => p.active !== false && (isAdmin() || p.dept === S.me.dept)) : [];
+  const pool = forOther ? Object.values(S.staff).filter(p => p.active !== false && canGrant(p.id)) : [];
   let restOpts = '', workOpts = '';
   if (who) {
     const hor = S.horarios[who.horario];
@@ -1041,7 +1045,7 @@ function cambioSheet(sh) {
 function permisoSheet(sh) {
   const forOther = sh.other, today = nowParts().day;
   const who = forOther ? (sh.sid ? S.staff[sh.sid] : null) : S.me;
-  const pool = forOther ? Object.values(S.staff).filter(p => p.active !== false && (isAdmin() || p.dept === S.me.dept)) : [];
+  const pool = forOther ? Object.values(S.staff).filter(p => p.active !== false && canGrant(p.id)) : [];
   let dayOpts = '';
   if (who) { const hor = S.horarios[who.horario]; for (let i = 0; i < 31; i++) { const d = addDays(today, i); if (worksOn(who, hor, d, S.cambios)) dayOpts += opt(d, niceDate(d) + (i === 0 ? ' · hoy' : ''), sh.day); } }
   const dur = sh.medio || '';
@@ -1060,7 +1064,8 @@ async function savePermiso() {
   if (mot.length < 3) { sh.err = 'Escribe el motivo'; return render(); }
   const p = S.staff[sid]; S.busy = true; render();
   try {
-    const auto = sh.other && (isAdmin() || (role() === 'jefe' && p.dept === S.me.dept));
+    if (sh.other && !canGrant(sid)) { S.busy = false; sh.err = 'No puedes dar este permiso. Pídelo desde "Pedir permiso" para que lo apruebe tu jefe.'; return render(); }
+    const auto = sh.other && canGrant(sid);
     await addDoc(C('cambios'), { tipo: 'permiso', sid, dept: p.dept, store: p.store, rest: day, work: null, medio: sh.medio || null, descuento: true, mot, estado: auto ? 'aprobado' : 'pendiente', by: S.me.id, at: serverTimestamp(), ...(auto ? { decidedBy: S.me.id } : {}) });
     S.busy = false; S.sheet = null; render(); toast(auto ? 'Permiso registrado' : 'Permiso enviado a tu jefe');
   } catch (e) { console.error(e); S.busy = false; sh.err = e.code || e.message; render(); }
@@ -1240,7 +1245,7 @@ async function saveCambio() {
   if (!sid || !rest || !work) { sh.err = 'Elige los dos días'; return render(); }
   const p = S.staff[sid]; S.busy = true; render();
   try {
-    const auto = other && (isAdmin() || (role() === 'jefe' && p.dept === S.me.dept));
+    const auto = other && canGrant(sid);
     await addDoc(C('cambios'), { sid, dept: p.dept, store: p.store, rest, work, mot: mot.trim(), estado: auto ? 'aprobado' : 'pendiente', by: S.me.id, at: serverTimestamp(), ...(auto ? { decidedBy: S.me.id } : {}) });
     S.busy = false; S.sheet = null; render(); toast(auto ? 'Descanso movido' : 'Solicitud enviada a tu jefe');
   } catch (e) { console.error(e); S.busy = false; sh.err = e.code || e.message; render(); }

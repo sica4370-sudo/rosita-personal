@@ -16,6 +16,12 @@ service cloud.firestore {
     function setupDone() { return exists(/databases/$(db)/documents/meta/setup); }
     // Solo durante la configuración inicial (antes de que exista meta/setup)
     function firstRun()  { return signed() && !setupDone(); }
+    function staffRole(sid) { return get(/databases/$(db)/documents/staff/$(sid)).data.role; }
+    function staffDept(sid) { return get(/databases/$(db)/documents/staff/$(sid)).data.dept; }
+    function canGrant(sid) {
+      return hasMe() && sid != me().sid && (isAdmin()
+        || (role() == 'jefe' && staffDept(sid) == me().dept && !(staffRole(sid) in ['jefe', 'admin', 'fundador'])));
+    }
     function onlyKeys(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
     match /meta/setup {
@@ -73,8 +79,10 @@ service cloud.firestore {
     // Cambios de día de descanso
     match /cambios/{id} {
       allow read: if hasMe();
-      allow create: if hasMe() && (request.resource.data.sid == me().sid || isMgr() || role() == 'encargada');
-      allow update: if isMgr();
+      // Nadie se aprueba a sí mismo; un jefe solo decide sobre gente de su área que no sea jefe.
+      allow create: if hasMe() && (request.resource.data.sid == me().sid || isMgr() || role() == 'encargada')
+        && (request.resource.data.estado == 'pendiente' || canGrant(request.resource.data.sid));
+      allow update: if canGrant(resource.data.sid) && request.resource.data.decidedBy == me().sid;
       allow delete: if isAdmin();
     }
 
