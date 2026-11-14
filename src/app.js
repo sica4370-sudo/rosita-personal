@@ -173,7 +173,7 @@ function stopListeners() { S.unsub.forEach(f => { try { f(); } catch (e) { } });
 // Última conexión: se guarda al abrir la app y al volver a ella (máximo una vez cada 3 min)
 let lastSeenAt = 0;
 function markVisto() { if (!S.me || document.hidden || Date.now() - lastSeenAt < 180e3) return; lastSeenAt = Date.now(); setDoc(D('visto', S.me.id), { at: serverTimestamp() }).catch(() => { lastSeenAt = 0; }); }
-const seenTxt = sid => { const v = (S.visto || {})[sid]; if (!v) return '<span style="color:#9a9a9a">nunca ha entrado</span>'; const m = tsMs(v.at), mins = (Date.now() - m) / 60000; return mins < 5 ? '<span style="color:#1a7f37">● en línea</span>' : `visto ${ago(m)}`; };
+const seenTxt = sid => { const v = (S.visto || {})[sid]; if (!v) return '<span style="color:#9a9a9a">sin conexión registrada aún</span>'; const m = tsMs(v.at), mins = (Date.now() - m) / 60000; return mins < 5 ? '<span style="color:#1a7f37">● en línea</span>' : `visto ${ago(m)}`; };
 function startListeners() {
   stopListeners();
   const day = nowParts().day;
