@@ -170,9 +170,15 @@ async function enter(sid) {
   setTimeout(() => { S.phase = 'app'; S.tab = 'inicio'; render(); handleDeep(); if (PUSH_OK() && Notification.permission === 'granted') pushToken(false); }, 600);
 }
 function stopListeners() { S.unsub.forEach(f => { try { f(); } catch (e) { } }); S.unsub = []; }
+// Última conexión: se guarda al abrir la app y al volver a ella (máximo una vez cada 3 min)
+let lastSeenAt = 0;
+function markVisto() { if (!S.me || document.hidden || Date.now() - lastSeenAt < 180e3) return; lastSeenAt = Date.now(); setDoc(D('visto', S.me.id), { at: serverTimestamp() }).catch(() => { lastSeenAt = 0; }); }
+const seenTxt = sid => { const v = (S.visto || {})[sid]; if (!v) return '<span style="color:#9a9a9a">nunca ha entrado</span>'; const m = tsMs(v.at), mins = (Date.now() - m) / 60000; return mins < 5 ? '<span style="color:#1a7f37">● en línea</span>' : `visto ${ago(m)}`; };
 function startListeners() {
   stopListeners();
   const day = nowParts().day;
+  markVisto();
+  if (isAdmin() || role() === 'jefe') S.unsub.push(onSnapshot(C('visto'), s => { S.visto = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); rerender(); }, () => { S.visto = null; }));
   S.unsub.push(onSnapshot(query(C('posts'), orderBy('at', 'desc'), limit(40)), s => { S.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); handleDeep(); }));
   S.unsub.push(onSnapshot(query(C('avisos'), where('to', '==', S.me.id)), s => { S.avisos = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => tsMs(b.at) - tsMs(a.at)); rerender(); appBadge(); }, e => console.error('avisos', e)));
   S.unsub.push(onSnapshot(C('notes'), s => { S.notes = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); rerender(); }));
@@ -889,7 +895,7 @@ function viewPeople() {
   for (const p of all) {
     if (p.store !== cur) { cur = p.store; h += `<div class="gh" style="margin:14px 2px 6px">${esc(storeN(cur))}</div>`; }
     const hor = S.horarios[p.horario];
-    h += `<button class="urow ${p.active === false ? 'off' : ''}" data-uedit="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}${p.active === false ? ' · desactivado' : ''}</b><small>${esc((ROLES[p.role] || {}).l || p.role)} · ${horLbl(hor)} · descansa ${p.descanso >= 0 ? DIAS_C[p.descanso] : '—'}${(p.medios || []).length ? ` · ½ día ${p.medios.map(d => DIAS_C[d]).join(' ')}` : ''}</small></div>${ico('edit')}</button>`;
+    h += `<button class="urow ${p.active === false ? 'off' : ''}" data-uedit="${p.id}">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}${p.active === false ? ' · desactivado' : ''}</b><small>${esc((ROLES[p.role] || {}).l || p.role)} · ${horLbl(hor)} · descansa ${p.descanso >= 0 ? DIAS_C[p.descanso] : '—'}${(p.medios || []).length ? ` · ½ día ${p.medios.map(d => DIAS_C[d]).join(' ')}` : ''}${S.visto ? `<span style="display:block">📱 ${seenTxt(p.id)}</span>` : ''}</small></div>${ico('edit')}</button>`;
   }
   return h;
 }
@@ -1531,7 +1537,7 @@ document.addEventListener('change', async e => {
   }
 });
 // Al volver a la app (otra hora del día), refresca la vista
-document.addEventListener('visibilitychange', () => { if (!document.hidden) rerender(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { rerender(); markVisto(); } });
 setInterval(() => { rerender(); checkBadges(); }, 60000);
 if ('serviceWorker' in navigator && !EMU) navigator.serviceWorker.register('sw.js').catch(() => { });
 // Enlaces de los avisos: ?p=publicación (&c=1 abre los comentarios) o ?b=1 (campanita)

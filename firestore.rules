@@ -129,6 +129,12 @@ service cloud.firestore {
         && request.resource.data.id is string && request.resource.data.estado == 'pendiente';
     }
 
+    // Última conexión de cada persona: cada quien escribe la suya; la ven Gerencia y jefes
+    match /visto/{sid} {
+      allow read: if isMgr();
+      allow write: if hasMe() && me().sid == sid && request.resource.data.keys().hasOnly(['at']);
+    }
+
     // Estado del envío de avisos (lo maneja solo el servidor)
     match /meta/push {
       allow read, write: if false;
