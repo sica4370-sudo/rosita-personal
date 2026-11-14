@@ -15,11 +15,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Credenciales
-        run: printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+      - name: Publicar reglas
+        working-directory: avisos
+        run: |
+          npm ci --omit=dev --no-audit --no-fund
+          node -e '
+            const admin = require("firebase-admin"), fs = require("fs");
+            admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.SA)) });
+            admin.securityRules().releaseFirestoreRulesetFromSource(fs.readFileSync("../firestore.rules", "utf8"))
+              .then(r => console.log("Reglas publicadas:", r.name))
+              .catch(e => { console.error(e.message); process.exit(1); });'
         env:
           SA: ${{ secrets.ROSITA_SERVICE_ACCOUNT }}
-      - name: Publicar reglas
-        run: npx -y firebase-tools@15 deploy --only firestore:rules --project rosita-personal --non-interactive
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
