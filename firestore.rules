@@ -91,6 +91,13 @@ service cloud.firestore {
       allow read: if hasMe();
       allow create: if canPost() && request.resource.data.by == me().sid
         && request.resource.data.kind in ['anuncio', 'reco', 'foto', 'texto'];
+      // "Me comprometo a llegar puntual": cualquiera del equipo, solo a su nombre y con el texto corto
+      allow create: if hasMe() && request.resource.data.by == me().sid
+        && request.resource.data.kind == 'compromiso'
+        && request.resource.data.keys().hasOnly(['kind', 'by', 'para', 'tx', 'abierto', 'at', 'likedBy'])
+        && request.resource.data.para is string && request.resource.data.para.size() == 10
+        && request.resource.data.abierto == true
+        && request.resource.data.tx is string && request.resource.data.tx.size() <= 140;
       // Cualquiera reacciona, comenta (contador y último comentario) y marca "visto" solo con su propio nombre
       allow update: if hasMe() && onlyKeys(['likedBy', 'claps', 'seen', 'nc', 'lastC'])
         && request.resource.data.get('seen', {}).diff(resource.data.get('seen', {})).affectedKeys().hasOnly([me().sid])

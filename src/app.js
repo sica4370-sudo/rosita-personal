@@ -252,7 +252,43 @@ function rachaCard() {
   return `<div class="rcard" data-tab="perfil"><div class="rfire ${m.cur ? 'on' : ''}">🔥<b>${m.cur}</b></div><div class="rtx"><b>${m.cur ? `${m.cur} ${m.cur === 1 ? 'día' : 'días'} de racha` : 'Empieza tu racha hoy'}</b>
     <small>🛡️ ${m.left} ${m.left === 1 ? 'comodín' : 'comodines'} este mes · cubren hasta ${COMODIN_MAX} min</small><div class="rweek">${fireDots(m.days)}</div></div></div>
     ${sr ? `<div class="rstore">🏪 <b>${esc(storeN(S.me.store))}</b> · ${sr.cur ? `🔥 ${sr.cur} ${sr.cur === 1 ? 'día' : 'días'} con todo el equipo a tiempo` : 'el equipo empieza su racha hoy'}</div>` : ''}
-    ${top.length ? `<div class="rtop">${top.map(([id, x], i) => `<span class="${id === S.me.store ? 'me' : ''}">${['🥇', '🥈', '🥉'][i] || '🔥'} ${esc(storeN(id))} <b>${x.cur}</b></span>`).join('')}</div>` : ''}`;
+    ${top.length ? `<div class="rtop">${top.map(([id, x], i) => `<span class="${id === S.me.store ? 'me' : ''}">${['🥇', '🥈', '🥉'][i] || '🔥'} ${esc(storeN(id))} <b>${x.cur}</b></span>`).join('')}</div>` : ''}
+    ${rachaPeligro(m)}${compromisoCard(m)}`;
+}
+/* ---- Racha en peligro: le toca entrar pronto y todavía no marca ---- */
+function rachaPeligro(m) {
+  if (!m || m.cur < 1 || ((S.today || {}).arr || {})[S.me.id]) return '';
+  const day = nowParts().day, h = horDe(S.me, day); if (!h || h.flex || !worksOn(S.me, S.horarios[S.me.horario], day, S.cambios)) return '';
+  const now = nowParts().min, i = toMin(h.ini), tol = h.tol || 5; if (now < i - 30 || now >= i + tol) return '';
+  const f = i - now;
+  return `<button class="rpel" data-tab="marcar"><span>⏳</span><div><b>¡Tu racha de ${m.cur} ${m.cur === 1 ? 'día' : 'días'} está en peligro!</b><small>${f > 0 ? `Faltan ${f} min para tu entrada (${h.ini}).` : `Tu entrada es a las ${h.ini}: todavía estás a tiempo.`} Marca al llegar.</small></div></button>`;
+}
+/* ---- "Me comprometo": quien perdió su racha se compromete en público a llegar puntual ---- */
+// Próximo día que le toca trabajar (hoy si todavía no llega)
+function proxDia() {
+  const day = nowParts().day, hor = S.horarios[S.me.horario];
+  if (!((S.today || {}).arr || {})[S.me.id] && worksOn(S.me, hor, day, S.cambios) && nowParts().min < toMin((horDe(S.me, day) || {}).ini || '00:00')) return day;
+  for (let k = 1; k <= 7; k++) { const d = addDays(day, k); if (worksOn(S.me, hor, d, S.cambios)) return d; }
+  return addDays(day, 1);
+}
+const cuandoTx = (d, hoy = nowParts().day) => d === hoy ? 'hoy' : d === addDays(hoy, 1) ? 'mañana' : `el ${niceDate(d)}`;
+const miCompromiso = () => S.posts.find(x => x.kind === 'compromiso' && x.by === S.me.id && x.para >= nowParts().day && x.res !== 'no');
+function compromisoCard(m) {
+  if (!m || m.cur > 0) return '';
+  const real = m.days.filter(x => x.s !== 'off' && x.s !== 'pend'), last = real[real.length - 1];
+  if (!last || !['late', 'miss'].includes(last.s) || last.d < addDays(nowParts().day, -3)) return '';
+  const c = miCompromiso();
+  if (c) return `<div class="rcomp on"><span>💪</span><div><b>Te comprometiste a llegar puntual ${cuandoTx(c.para)}</b><small>${Object.keys(c.likedBy || {}).length ? `${Object.keys(c.likedBy).length} ${Object.keys(c.likedBy).length === 1 ? 'persona te dio' : 'personas te dieron'} ánimo 🔥` : 'Tu equipo ya lo puede ver en Novedades'}</small></div></div>`;
+  const d = proxDia();
+  return `<div class="rcomp"><span>💔</span><div><b>Tu racha se apagó</b><small>¡Vuelve a encenderla! Comprométete y Rosita te celebra cuando cumplas.</small></div><button class="rbtn" data-comp="${d}" ${S.busy ? 'disabled' : ''}>💪 Me comprometo a llegar puntual ${cuandoTx(d)}</button></div>`;
+}
+async function comprometerme(para) {
+  if (S.busy || miCompromiso()) return;
+  S.busy = true; render();
+  try {
+    await addDoc(C('posts'), { kind: 'compromiso', by: S.me.id, para, tx: `Me comprometo a llegar puntual ${cuandoTx(para)} 💪`, abierto: true, at: serverTimestamp(), likedBy: {} });
+    S.busy = false; render(); toast('💪 ¡Compromiso publicado! Tu equipo te va a dar ánimo');
+  } catch (e) { console.error(e); S.busy = false; render(); toast('No se pudo publicar. Revisa tu internet.'); }
 }
 /* ---- Arena D'La Rossa (lo manda el puente de la Arena cada 30 min; sin quetzales) ---- */
 const ARENA_URL = 'https://arenadlarossa.netlify.app/';
@@ -505,9 +541,9 @@ const BIC = { comment: '💬', reply: '💬', mention: '@', reco: '👏', post: 
 function bellLine(x) {
   const nm = `<b>${x.from === 'rosita' ? 'Rosita' : esc(dirP(x.from).n || 'Alguien')}</b>`;
   if (x.k === 'p') {
-    const it = x.it, w = it.kind === 'anuncio' ? 'publicó un anuncio' : it.kind === 'foto' ? 'compartió una foto' : it.kind === 'texto' ? 'publicó' : it.kind === 'reco' ? `reconoció a ${esc(first(dirP(it.to).n))} 👏`
-      : it.kind2 === 'noticiero' ? 'publicó Rosita Noticias 🎙️' : it.kind2 === 'tabla' ? 'publicó cómo va la Arena 🏆' : 'tiene noticias de última hora ⚡';
-    const t = it.kind === 'auto' ? '' : it.tx;
+    const it = x.it, w = it.kind === 'anuncio' ? 'publicó un anuncio' : it.kind === 'foto' ? 'compartió una foto' : it.kind === 'texto' ? 'publicó' : it.kind === 'reco' ? `reconoció a ${esc(first(dirP(it.to).n))} 👏` : it.kind === 'compromiso' ? 'se comprometió a llegar puntual 💪'
+      : it.kind2 === 'rachas' ? 'publicó el reporte de rachas 🔥' : it.kind2 === 'cumplio' ? `celebra a ${esc(first(dirP(it.who).n))}: ¡cumplió su compromiso! 🎉` : it.kind2 === 'noticiero' ? 'publicó Rosita Noticias 🎙️' : it.kind2 === 'tabla' ? 'publicó cómo va la Arena 🏆' : 'tiene noticias de última hora ⚡';
+    const t = it.kind === 'auto' || it.kind === 'compromiso' ? '' : it.tx;
     return `${nm} ${w}${t ? `: “${esc(snip(t))}”` : ''}`;
   }
   if (x.type === 'rx') return `${nm} reaccionó ${esc(x.tx || '❤️')} a tu publicación`;
@@ -735,11 +771,29 @@ function postCard(it) {
       ${ts ? `<div class="th">🏪 Desafío de Tiendas</div>${ts}` : ''}
       ${ls ? `<div class="th">⭐ Liga de Vendedoras</div>${ls}${lg.length > 10 ? `<button class="tmore" data-lmore="${it.id}">${open ? 'Ver menos' : `Ver toda la Liga (${lg.length})`}</button>` : ''}` : ''}
       ${yo && yo.o > 10 && !open ? `<div class="trow me"><span class="tp">${yo.o}</span><span class="tn">Tú</span><b>${yo.p} pts</b></div>` : ''}</div>`;
+  } else if (it.kind === 'auto' && it.kind2 === 'rachas') {
+    badge = '<span class="rt auto">Rachas</span>';
+    const ns = it.notas || [], lead = ns[0], m = !isSup() && inRacha(S.me) ? myRacha() : null;
+    body = `<div class="ptx pcap" style="padding-top:2px">${nl(it.tx || '')}</div><div class="news">
+      <div class="nbar"><span class="live">🔥 RACHAS</span><b>ROSITA NOTICIAS</b><span class="nd">${esc((it.title || '').split('·').pop() || '')}</span></div>
+      ${lead ? `<div class="nlead"><span>${esc(lead.e)}</span><h3>${esc(lead.h)}</h3><p>${esc(lead.s || '')}</p></div>` : ''}
+      ${ns.slice(1).map(n => `<div class="nitem"><i>${esc(n.e)}</i><div><b>${esc(n.h)}</b><small>${esc(n.s || '')}</small></div></div>`).join('')}
+      ${m ? `<div class="ntuyo"><span>📍 Para ti</span>${m.cur ? `🔥 Llevas <b>${m.cur} ${m.cur === 1 ? 'día' : 'días'}</b> de racha. ¡No la sueltes!` : '🔥 Hoy es un buen día para encender tu racha.'}</div>` : ''}</div>`;
+  } else if (it.kind === 'auto' && it.kind2 === 'cumplio') {
+    badge = '<span class="rt reco">🎉 ¡Cumplió!</span>';
+    const t = dirP(it.who);
+    body = `<div class="pimg g-cumplio"><div class="rav">${av(t)}<span>🔥</span></div><div class="rtt"><b>${t.id === u.id ? '¡Tú' : esc(t.n)}</b> ${t.id === u.id ? 'cumpliste tu compromiso!' : 'cumplió su compromiso'}</div><div class="rcat">💪 Llegó puntual${it.t ? ` a las ${esc(it.t)}` : ''}</div><div class="rq">${t.id === u.id ? '¡Tu racha vuelve a encenderse! 🔥' : '¡Su racha vuelve a encenderse! Déjale tu reacción 👏'}</div></div>`;
   } else if (it.kind === 'auto') {
     const gan = /^arena-cierre/.test(it.id);
     badge = `<span class="rt auto">${gan ? 'Noticiero' : 'Última hora'}</span>`;
     body = `<div class="news"><div class="nbar"><span class="live">${gan ? '🏆 ESPECIAL' : '⚡ ÚLTIMA HORA'}</span><b>ROSITA NOTICIAS</b></div>
       <div class="nlead"><span>${esc(it.icon || '🏆')}</span><h3>${esc(it.title || '')}</h3>${it.tx ? `<p>${nl(it.tx)}</p>` : ''}</div></div>`;
+  }
+  if (it.kind === 'compromiso') {
+    badge = '<span class="rt reco">💪 Compromiso</span>';
+    const yo = it.by === u.id, hoy = nowParts().day;
+    const est = it.res === 'ok' ? `✅ ¡Cumplió! Llegó a las ${esc(it.llego || '')}` : it.para >= hoy ? (yo ? 'Tu equipo te está echando porras 🔥' : 'Dale ánimo con una reacción 🔥') : '';
+    body = `<div class="pimg g-comp"><div class="rav">${av(p)}<span>💪</span></div><div class="rtt"><b>${yo ? 'Te comprometiste' : `${esc(p.n)} se comprometió`}</b><br>a llegar puntual ${cuandoTx(it.para)}</div>${est ? `<div class="rcat">${est}</div>` : ''}</div>`;
   }
   if (it.kind === 'texto') body = it.bg && it.tx.length <= TBG_MAX ? `<div class="pimg fbstat tb${it.bg}"><div>${richTx(it.tx, it.men)}</div></div>` : `<div class="ptx pcap tpost">${richTx(it.tx, it.men)}</div>`;
   if (it.kind === 'foto') { badge = `<span class="rt auto">${esc(it.tag || '📷')}</span>`; body = `<div class="pfoto"><img src="${it.img}" alt="" loading="lazy"></div><div class="pcap" style="padding-top:8px"><b>${esc(first(p.n))}</b> ${nl(it.tx || '')}</div>`; }
@@ -776,7 +830,7 @@ function viewInicio() {
   h += birthdayCards();
   const items = S.posts.filter(it => {
     if (it.kind === 'anuncio' && it.aud && it.aud !== 'all' && it.aud !== u.store && !isMgr() && it.by !== u.id) return false;
-    if (S.scope === 'tienda') { if (it.kind === 'foto') return it.store === u.store; if (it.kind === 'reco') return (P(it.to) || {}).store === u.store; if (it.kind === 'anuncio') return it.aud === u.store; if (it.kind === 'texto') return (P(it.by) || {}).store === u.store; if (it.kind === 'auto') return !it.tienda || sameN(it.tienda, storeN(u.store)); }
+    if (S.scope === 'tienda') { if (it.kind === 'foto') return it.store === u.store; if (it.kind === 'reco') return (P(it.to) || {}).store === u.store; if (it.kind === 'anuncio') return it.aud === u.store; if (it.kind === 'texto' || it.kind === 'compromiso') return (P(it.by) || {}).store === u.store; if (it.kind === 'auto' && it.kind2 === 'cumplio') return (P(it.who) || {}).store === u.store; if (it.kind === 'auto') return !it.tienda || sameN(it.tienda, storeN(u.store)); }
     return true;
   });
   const arr = llegadasCard(); let placed = false;
@@ -1340,6 +1394,7 @@ document.addEventListener('click', async e => {
     if (S.pinbuf.length === 4) tryPin();
     return;
   }
+  if (d.comp) return comprometerme(d.comp);
   if (d.tab) { S.tab = d.tab; S.sheet = null; render(); $('.sbody') && ($('.sbody').scrollTop = 0); return; }
   if (d.sub) { S.sub = d.sub; render(); return; }
   if (d.scope) { S.scope = d.scope; render(); return; }

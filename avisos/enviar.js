@@ -7,6 +7,9 @@
    5) Permisos y descansos: avisa a quien debe aprobar, avisa a Gerencia y a la persona cuando se decide,
       manda a las 7:00 a. m. el resumen de quién falta hoy y copia cada ausencia aprobada a Google Calendar
       (calendario que Gerencia conecta en Gestión → Descansos; se guarda en meta/calendario).
+   6) Rachas: avisa a quien tiene su racha en peligro (le toca entrar y no ha marcado), publica cada mañana
+      el reporte de rachas de ayer en Rosita Noticias (sin nombres de quien la perdió) y revisa los compromisos
+      ("Me comprometo a llegar puntual"): si la persona cumple, Rosita lo celebra.
    Necesita el secreto ROSITA_SERVICE_ACCOUNT (llave de una cuenta de servicio del proyecto rosita-personal). */
 const admin = require("firebase-admin");
 const KEY = process.env.ROSITA_SERVICE_ACCOUNT;
@@ -19,7 +22,8 @@ const TZ = "America/Guatemala";
 
 function gtNow() {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date()).map(x => [x.type, x.value]));
-  return { day: `${p.year}-${p.month}-${p.day}`, md: `${p.month}-${p.day}`, h: +(p.hour === "24" ? 0 : p.hour) };
+  const h = +(p.hour === "24" ? 0 : p.hour);
+  return { day: `${p.year}-${p.month}-${p.day}`, md: `${p.month}-${p.day}`, h, min: h * 60 + +p.minute };
 }
 const snip = (s, n = 110) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0);
@@ -128,6 +132,80 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
     return hecho;
   }
 
+  async function rachas() {
+    const RS = require("./rachas-srv");
+    const R = await RS.crear(), out = {};
+    const [horS, storeS] = await Promise.all([db.collection("horarios").get(), db.collection("stores").get()]);
+    const H = Object.fromEntries(horS.docs.map(d => [d.id, d.data()])), stores = Object.fromEntries(storeS.docs.map(d => [d.id, d.data()]));
+    const hist = {}, getDia = async d => { if (!(d in hist)) { const x = await db.doc("days/" + d).get(); hist[d] = x.exists ? (x.data().arr || {}) : {}; } return hist[d]; };
+    await getDia(G.day);
+    let full = null;
+    const completo = async () => {
+      if (full) return full;
+      const desde = RS.addD(G.day, -60);
+      const [dS, cS] = await Promise.all([db.collection("days").where(FieldPath.documentId(), ">=", desde).get(), db.collection("cambios").where("rest", ">=", RS.addD(desde, -5)).get()]);
+      dS.docs.forEach(d => { hist[d.id] = (d.data() || {}).arr || {}; });
+      const cambios = cS.docs.map(d => ({ id: d.id, ...d.data() })), histStart = dS.docs.map(d => d.id).sort()[0] || G.day;
+      full = { cambios, per: R.calcular({ staff, H, cambios, hist, histStart, today: G.day }) };
+      return full;
+    };
+
+    // a) Racha en peligro: primero vemos (sin leer historial) si a alguien le toca entrar pronto y no ha marcado
+    const pel = meta.peligro && meta.peligro.day === G.day ? meta.peligro : { day: G.day, s: {} };
+    const hoy = hist[G.day], cerca = activos.filter(p => {
+      if (pel.s[p.id] || hoy[p.id] || !R.enRacha(p, H)) return false;
+      const h = H[p.horario], ini = RS.toMin(R.entradaBase(p, h, G.day)); return G.min >= ini - 15 && G.min < ini + (h.tol || 5);
+    });
+    if (cerca.length) {
+      const { cambios, per } = await completo();
+      for (const x of R.peligro({ staff: Object.fromEntries(cerca.map(p => [p.id, p])), H, cambios, hist, per, today: G.day, nowMin: G.min })) {
+        const cuando = x.faltan > 0 ? `Faltan ${x.faltan} min para tu entrada (${x.ini}).` : `Tu entrada es a las ${x.ini}: todavía estás a tiempo.`;
+        await enviar([x.sid], { title: `🔥 Tu racha de ${x.cur} ${x.cur === 1 ? "día" : "días"} está en peligro`, body: `${cuando} Marca al llegar para mantenerla${x.left > 0 ? ` (si te atrasas, un comodín te cubre hasta 15 min)` : ""}.`, link: APP, tag: "peligro-" + G.day });
+        pel.s[x.sid] = 1;
+      }
+    }
+    out.peligro = pel;
+
+    // b) Reporte de rachas de ayer en Rosita Noticias (una vez al día, desde las 7:20 a. m.)
+    if (G.min >= 7 * 60 + 20 && meta.rachasRep !== G.day) {
+      const { per } = await completo(), yday = RS.addD(G.day, -1), r = R.reporte({ staff, per, stores, yday });
+      if (r.tocaba > 0) {
+        const BN = { 3: "En racha 🔥", 7: "Semana de fuego ⚡", 15: "Imparable 🚀", 30: "Leyenda del mes 👑", 60: "Diamante 💎", 90: "Diamante 💎" };
+        const pl = (n, a, b) => `${n} ${n === 1 ? a : b}`, llegaron = r.aTiempo + r.comodin;
+        const notas = [{ e: "🔥", h: `${pl(r.encendidas, "racha sigue encendida", "rachas siguen encendidas")}`, s: `Ayer ${llegaron} de ${r.tocaba} llegaron a tiempo${r.comodin ? ` (${r.comodin} con comodín 🛡️)` : ""}.` }];
+        r.hitos.slice(0, 5).forEach(x => notas.push({ e: "🏅", h: `${nombre(x.sid)} llegó a ${x.n} días de racha`, s: `Ganó la insignia ${BN[x.n] || "🔥"}. ¡Déjale tu reacción!` }));
+        if (r.tiendasPerfectas.length) notas.push({ e: "🏪", h: r.tiendasPerfectas.length === 1 ? `${r.tiendasPerfectas[0]}: todo el equipo a tiempo` : "Tiendas con todo el equipo a tiempo", s: r.tiendasPerfectas.length === 1 ? "¡Así se hace equipo! 🤝" : r.tiendasPerfectas.join(" · ") });
+        if (r.top.length) notas.push({ e: "👑", h: "Las rachas más largas", s: r.top.map((x, i) => `${["🥇", "🥈", "🥉"][i]} ${nombre(x.sid)} · ${x.cur} días`).join("   ") });
+        notas.push(r.apagadas
+          ? { e: "💔", h: `Ayer ${r.apagadas === 1 ? "se apagó 1 racha" : `se apagaron ${r.apagadas} rachas`}`, s: "¡Hoy se vuelven a encender! Si se te apagó, toca «Me comprometo» en tu racha 💪" }
+          : { e: "🎉", h: "¡Ayer no se apagó ninguna racha!", s: "Sigamos así hoy también." });
+        const tx = r.apagadas ? `Ayer ${llegaron} de ${r.tocaba} llegaron a tiempo. ${r.hitos.length ? `${nombre(r.hitos[0].sid)} llegó a ${r.hitos[0].n} días 🔥` : "¡Hoy encendemos más rachas! 🔥"}` : `Ayer ${llegaron} de ${r.tocaba} llegaron a tiempo y ninguna racha se apagó 🎉`;
+        const DC = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"], MS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"], dd = new Date(G.day + "T12:00:00Z");
+        await db.doc("posts/rachas-" + G.day).set({ kind: "auto", kind2: "rachas", by: "rosita", src: "personal", title: `Rachas · ${DC[dd.getUTCDay()]} ${dd.getUTCDate()} ${MS[dd.getUTCMonth()]}`, tx, notas, at: FieldValue.serverTimestamp(), likedBy: {} });
+      }
+      out.rachasRep = G.day;
+    }
+
+    // c) Compromisos: si llegó a tiempo el día que se comprometió, Rosita lo celebra
+    const cs = await db.collection("posts").where("kind", "==", "compromiso").where("abierto", "==", true).get();
+    for (const d of cs.docs) {
+      const c = d.data();
+      if (!c.para || now - ms(c.at) > 10 * 864e5) { await d.ref.update({ abierto: false, res: "no" }); continue; }
+      if (c.para > G.day) continue;
+      for (let k = 0; k < 7 && RS.addD(c.para, k) <= G.day; k++) await getDia(RS.addD(c.para, k));
+      const cambios = full ? full.cambios : (await db.collection("cambios").where("sid", "==", c.by).get()).docs.map(x => ({ id: x.id, ...x.data() }));
+      const v = R.revisarCompromiso(c, { staff, H, cambios, hist, today: G.day });
+      if (!v) continue;
+      await d.ref.update({ abierto: false, res: v.res, ...(v.t ? { llego: v.t } : {}) });
+      if (v.res === "ok") {
+        const p = staff[c.by] || {}, rx = Object.keys(c.likedBy || {});
+        const notify = [...new Set([...activos.filter(x => x.store && x.store === p.store).map(x => x.id), ...rx, c.by])];
+        await db.doc("posts/cumplio-" + d.id).set({ kind: "auto", kind2: "cumplio", by: "rosita", src: "personal", who: c.by, comp: d.id, t: v.t, title: `¡${nombre(c.by)} cumplió su compromiso!`, tx: `Se comprometió a llegar puntual y llegó a las ${v.t} 🔥 ¡Así se hace!`, notify, at: FieldValue.serverTimestamp(), likedBy: {} });
+      }
+    }
+    return out;
+  }
+
   // 1) Avisos personales
   const pend = await db.collection("avisos").where("sent", "==", false).limit(300).get();
   const lote = db.batch(); let nLote = 0;
@@ -142,6 +220,9 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
   }
   if (nLote) await lote.commit();
 
+  // 6) Rachas (antes de las publicaciones nuevas, para que el reporte y los festejos se avisen en esta misma vuelta)
+  const rachasEstado = await rachas().catch(e => { console.error("rachas", e); return {}; });
+
   // 2) Publicaciones nuevas para todos
   let last = meta.last || now - 10 * 60e3, maxAt = last;
   const nuevas = await db.collection("posts").where("at", ">", Timestamp.fromMillis(last)).orderBy("at").limit(50).get();
@@ -152,6 +233,11 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
     if (it.kind === "anuncio") {
       const quien = activos.filter(p => p.id !== it.by && (!it.aud || it.aud === "all" || p.store === it.aud)).map(p => p.id);
       await enviar(quien, { title: `📣 Anuncio de ${nombre(it.by)}`, body: it.tx, link, tag: "p-" + d.id });
+    } else if (it.kind === "auto" && it.kind2 === "cumplio") {
+      await enviar((it.notify || []).filter(x => x !== it.who), { title: `🎉 ¡${nombre(it.who)} cumplió su compromiso!`, body: it.tx || "Llegó puntual 🔥", link, tag: "p-" + d.id });
+      await enviar([it.who], { title: "🔥 ¡Cumpliste tu compromiso!", body: "Rosita lo publicó en Novedades. ¡Tu racha vuelve a encenderse!", link, tag: "p-" + d.id });
+    } else if (it.kind === "auto" && it.kind2 === "rachas") {
+      await enviar(activos.map(p => p.id), { title: "🔥 Rosita Noticias · Rachas", body: it.tx || "Mira cómo amanecieron las rachas", link, tag: "rosita-rachas" });
     } else if (it.kind === "auto") {
       const title = it.kind2 === "noticiero" ? "🎙️ Rosita Noticias" : it.kind2 === "tabla" ? "🏆 Así va la Arena" : `⚡ ${it.title || "Última hora"}`;
       const body = it.kind2 === "noticiero" ? ((it.notas || [])[0] || {}).h || it.tx : it.kind2 === "tabla" ? it.tx : (it.tx || it.title);
@@ -167,7 +253,7 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
   }
   // 5) Permisos y descansos
   const ausHoy = await ausencias();
-  await db.doc("meta/push").set({ last: maxAt, cumple, ausHoy, en: now }, { merge: true });
+  await db.doc("meta/push").set({ last: maxAt, cumple, ausHoy, ...rachasEstado, en: now }, { merge: true });
 
   // 4) Limpieza
   for (const [sid, tks] of Object.entries(malos)) { try { await db.doc("privado/" + sid).update(...[...new Set(tks)].flatMap(t => [new FieldPath("tk", t), FieldValue.delete()])); } catch (e) { console.error("limpieza", e.message); } }
