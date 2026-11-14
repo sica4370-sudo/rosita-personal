@@ -100,16 +100,29 @@ const fixedIn = h => !!h && (!h.flex || !!h.flexIni);
 const horLbl = h => !h ? 'sin horario' : h.flex ? (h.flexIni ? `entra ${h.ini} · salida libre` : 'horario flexible') : `${h.ini}–${h.fin}`;
 const corte = (p, h) => p.medioH || fmtMin(Math.round((toMin(h.ini) + toMin(h.fin)) / 2 / 30) * 30);
 // Horario real de una persona en una fecha: considera sus días de medio día y los permisos de medio día
-function horDe(p, day) {
+function horBase(p, day) {
   const h = p && S.horarios[p.horario]; if (!h || h.flex) return h || null;
   const wd = new Date(day + 'T12:00:00').getDay(), cut = corte(p, h);
-  const perm = S.cambios.find(c => c.sid === p.id && c.tipo === 'permiso' && c.estado === 'aprobado' && c.rest === day && c.medio);
+  const perm = S.cambios.find(c => c.sid === p.id && c.tipo === 'permiso' && c.estado === 'aprobado' && c.rest === day && c.medio && c.medio !== 'horas');
   let t = null, why = '';
   if (perm) { t = perm.medio === 'am' ? 'pm' : 'am'; why = 'permiso'; }
   else if ((p.medios || []).includes(wd)) { t = p.medioT || 'am'; why = 'medio'; }
   if (!t) return h;
   return { ...h, ini: t === 'am' ? h.ini : cut, fin: t === 'am' ? cut : h.fin, lunch: 0, medio: t, why };
 }
+// Permiso por horas aprobado de una persona en una fecha
+const permHoras = (sid, day) => S.cambios.find(c => c.sid === sid && c.tipo === 'permiso' && c.estado === 'aprobado' && c.rest === day && c.medio === 'horas');
+// Horario real con permiso por horas: si cubre el inicio entra más tarde, si cubre el final sale antes; a media jornada marca salida y regreso
+function horDe(p, day) {
+  const h = horBase(p, day), ph = h && !h.flex && permHoras(p.id, day);
+  if (!ph) return h;
+  const a = toMin(ph.desde), b = toMin(ph.hasta), i = toMin(h.ini), f = toMin(h.fin);
+  if (a <= i && b > i) return { ...h, ini: ph.hasta, perm: ph, permT: 'entra' };
+  if (b >= f && a < f) return { ...h, fin: ph.desde, perm: ph, permT: 'sale' };
+  return { ...h, perm: ph, permT: 'medio' };
+}
+// ¿Esta persona está fuera con permiso ahora? (marcó salida con permiso y aún no regresa)
+const permFuera = (marks, day) => { const m = marks.filter(x => x.day === day && ['permsal', 'permreg'].includes(x.type)); const l = m[m.length - 1]; return l && l.type === 'permsal' ? l : null; };
 const medioTxt = p => { const h = S.horarios[p.horario]; if (!h || !(p.medios || []).length) return ''; return `Medio día ${p.medios.map(d => DIAS_C[d]).join(', ')} (${(p.medioT || 'am') === 'am' ? `${h.ini}–${corte(p, h)}` : `${corte(p, h)}–${h.fin}`})`; };
 const role = () => S.me ? S.me.role : null;
 const isAdmin = () => role() === 'admin';
@@ -349,7 +362,7 @@ function myState() {
   if (openExtra([...(S.myMarksY || []), ...S.myMarks])) return 'extra';
   const m = S.myMarks.filter(x => !XT.includes(x.type)); if (!m.length) return 'fuera';
   const last = m[m.length - 1].type;
-  return last === 'salida' ? 'salio' : last === 'almuerzo' ? 'almuerzo' : 'trabajando';
+  return last === 'salida' ? 'salio' : last === 'almuerzo' ? 'almuerzo' : last === 'permsal' ? 'permiso' : 'trabajando';
 }
 function heroCard() {
   const u = S.me, { day, hor, works } = todayInfo(u), np = nowParts(), st = myState();
@@ -375,7 +388,7 @@ function heroCard() {
   if (st === 'fuera') {
     const late = np.min - ini0, free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role);
     if (np.min >= toMin(hor.fin)) return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>Tu jornada ya terminó</h2><p>Tu horario de hoy: ${hor.ini}–${hor.fin}</p><button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} Marcar</button></div>`;
-    return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>${late > 120 ? 'No has marcado tu entrada' : late > (hor.tol || 5) ? `Vas ${late} min tarde` : `Tu entrada es a las ${hor.ini}`}</h2>${hor.medio ? `<p>☀️ Hoy trabajas medio día: ${hor.ini}–${hor.fin}</p>` : ''}
+    return `<div class="hero h-in"><small>${hr}, ${esc(first(u.n))}</small><h2>${late > 120 ? 'No has marcado tu entrada' : late > (hor.tol || 5) ? `Vas ${late} min tarde` : `Tu entrada es a las ${hor.ini}`}</h2>${hor.medio ? `<p>☀️ Hoy trabajas medio día: ${hor.ini}–${hor.fin}</p>` : ''}${hor.perm ? `<p>📝 Hoy tienes permiso de ${hor.perm.desde} a ${hor.perm.hasta}</p>` : ''}
       <p>${ico('pin')} ${free ? 'Desde la oficina, una tienda u otro lugar' : esc(storeN(u.store))}</p>
       <button class="hbtn" data-mark="entrada" ${S.busy ? 'disabled' : ''}>${ico('in')} ${S.busy ? 'Verificando ubicación…' : 'Marcar entrada'}</button></div>`;
   }
@@ -383,10 +396,15 @@ function heroCard() {
     const o = S.myMarks.filter(x => x.type === 'almuerzo').pop(), m = np.min - o.min;
     return `<div class="hero h-lunch"><small>En almuerzo</small><h2>${m} de ${hor.lunch} min</h2><div class="hbar"><i style="width:${Math.min(100, m / hor.lunch * 100)}%"></i></div><button class="hbtn" data-mark="regreso" ${S.busy ? 'disabled' : ''}>${ico('back')} Regresé</button></div>`;
   }
+  if (st === 'permiso') {
+    const o = S.myMarks.filter(x => x.type === 'permsal').pop(), ph = hor.perm, rest = ph ? toMin(ph.hasta) - np.min : 0;
+    return `<div class="hero h-lunch"><small>📝 Con permiso</small><h2>${!ph ? 'Fuera con permiso' : rest >= 0 ? `Regresas a las ${ph.hasta}` : `Tu regreso era a las ${ph.hasta}`}</h2><p>Saliste a las ${o.hm}</p><button class="hbtn" data-mark="permreg" ${S.busy ? 'disabled' : ''}>${ico('back')} ${S.busy ? 'Verificando ubicación…' : 'Ya regresé'}</button></div>`;
+  }
   if (st === 'salio') return `<div class="hero h-done"><small>Hasta mañana</small><h2>Jornada terminada</h2><p>¡Gracias por tu día, ${esc(first(u.n))}! 🌙${extraMin(S.myMarks, day) ? ` · Extra hoy: ${hmin(extraMin(S.myMarks, day))}` : ''}</p>${xbtn}</div>`;
   const e = S.myMarks.find(x => x.type === 'entrada'), lunchOk = hor.lunch > 0 && !S.myMarks.some(x => x.type === 'almuerzo');
-  return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${hor.flex ? `${hor.flexIni && !e.late ? ' · a tiempo ✓' : ''} · salida libre` : `${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : ''}`}</p>
-    <div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
+  const permOk = hor.permT === 'medio' && !S.myMarks.some(x => x.type === 'permsal');
+  return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${hor.flex ? `${hor.flexIni && !e.late ? ' · a tiempo ✓' : ''} · salida libre` : `${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : hor.permT === 'sale' ? ' (permiso)' : ''}`}</p>${permOk ? `<p>📝 Tienes permiso de ${hor.perm.desde} a ${hor.perm.hasta}</p>` : ''}
+    ${permOk ? `<button class="hbtn" data-mark="permsal" style="margin-bottom:8px">📝 Salir con permiso</button>` : ''}<div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
 }
 // Reacciones a notas: notes/{sid}.rx = { persona: emoji }
 function noteRxBadge(n) { const v = Object.values(n.rx || {}); if (!v.length) return ''; const c = {}; v.forEach(e => c[e] = (c[e] || 0) + 1); return `<i class="nrxb">${Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 2).map(x => x[0]).join('')}${v.length > 1 ? v.length : ''}</i>`; }
@@ -772,12 +790,13 @@ function misCambios() {
   const u = S.me, mine = S.cambios.filter(c => c.sid === u.id).sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 5);
   return `<div class="h3">Descansos y permisos</div>
   ${isFlex(u) ? '' : `<button class="act sec" data-cnew style="padding:12px;font-size:15px;width:100%;margin-bottom:8px"><span class="ic">${ico('swap')}</span><span>Cambiar un día de descanso<small>En vez de perder el día, lo mueves a otra fecha</small></span></button>`}
-  <button class="act sec" data-pnew style="padding:12px;font-size:15px;width:100%"><span class="ic">${ico('cal')}</span><span>Pedir permiso<small>Día completo o medio día · se descuenta</small></span></button>
+  <button class="act sec" data-pnew style="padding:12px;font-size:15px;width:100%"><span class="ic">${ico('cal')}</span><span>Pedir permiso<small>Día completo, medio día o por horas</small></span></button>
   ${mine.length ? `<ul class="tl" style="margin-top:6px">${mine.map(c => `<li style="flex-wrap:wrap"><span style="flex:1">${cambioTxt(c)}<small style="display:block;color:#65676b">${esc(c.mot || '')}</small></span>${chipC(c)}</li>`).join('')}</ul>` : ''}`;
 }
 const MEDIO_L = { am: 'medio día (mañana)', pm: 'medio día (tarde)' };
+const durTxt = c => c.medio === 'horas' ? `de ${c.desde} a ${c.hasta}` : c.medio ? MEDIO_L[c.medio] : 'día completo';
 const cambioTxt = c => c.tipo === 'permiso'
-  ? `📝 Permiso <b>${niceDate(c.rest)}</b> · ${c.medio ? MEDIO_L[c.medio] : 'día completo'} · se descuenta`
+  ? `📝 Permiso <b>${niceDate(c.rest)}</b> · ${durTxt(c)}`
   : `Descansa <b>${niceDate(c.rest)}</b> · trabaja <b>${niceDate(c.work)}</b>`;
 const chipC = c => c.estado === 'pendiente' ? '<span class="st y">Pendiente</span>' : c.estado === 'aprobado' ? `<span class="st g">✓ Aprobado</span>` : '<span class="st p" style="color:var(--warn)">✕ Rechazado</span>';
 const decTxt = c => { if (c.estado === 'pendiente' || !c.decidedBy) return ''; const d = dirP(c.decidedBy); return ` · ${c.estado === 'aprobado' ? 'aprobó' : 'rechazó'} ${esc(first(d.n || '?'))}${c.decidedBy === c.sid ? ' (a sí mismo/a)' : ''}`; };
@@ -822,8 +841,14 @@ function viewMiTienda() {
   const team = Object.values(S.staff).filter(p => p.active !== false && !isSup(p) && p.store === u.store);
   return `<div style="padding:14px 16px"><div class="h3" style="margin-top:0">${esc(storeN(u.store))} <span>${team.length} personas</span></div>` + team.map(p => {
     const w = worksOn(p, S.horarios[p.horario], day, S.cambios), a = arr[p.id];
-    return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${(rachas() || { per: {} }).per[p.id] ? ` · 🔥 ${rachas().per[p.id].cur}` : ''}</small></div>${isFlex(p) && !a && !out[p.id] ? '<span class="st p">horario flexible</span>' : !w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
+    return `<div class="mate">${av(dirP(p.id))}<div style="flex:1"><b>${p.id === u.id ? 'Tú' : esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${(rachas() || { per: {} }).per[p.id] ? ` · 🔥 ${rachas().per[p.id].cur}` : ''}</small></div>${isFlex(p) && !a && !out[p.id] ? '<span class="st p">horario flexible</span>' : !w ? `<span class="st p">${restReason(p, S.horarios[p.horario], day, S.cambios).k === 'permiso' ? 'permiso' : 'descansa'}</span>` : out[p.id] ? '<span class="st b">ya salió</span>' : permFuera((S.liveMarks || []).filter(m => m.sid === p.id), day) ? '<span class="st y">📝 con permiso</span>' : a ? '<span class="st g">● en tienda</span>' : '<span class="st p">aún no llega</span>'}</div>`;
   }).join('') + `<div class="note">Tu equipo ve si ya llegaste, nunca tus tardanzas. Eso solo lo ven tus jefes.</div></div>`;
+}
+// Salida y regreso reales de un permiso por horas (para En vivo)
+function permTxt(pm, day) {
+  const s = pm.filter(m => m.day === day && m.type === 'permsal').pop(), r = pm.filter(m => m.day === day && m.type === 'permreg').pop();
+  if (!s) return ''; if (!r) return ` · salió ${s.hm}`;
+  return ` · salió ${s.hm}, regresó ${r.hm}${r.tarde > 0 ? ` (+${r.tarde} min)` : ''}`;
 }
 function viewLive() {
   const day = nowParts().day, T = S.today || {}, arr = T.arr || {}, out = T.out || {}, lunch = T.lunch || {};
@@ -843,12 +868,13 @@ function viewLive() {
       if (!w) { const r = restReason(p, hor, day, S.cambios); chip = `<span class="st p">${r.k === 'permiso' ? '📝 permiso' : r.k === 'cambio' ? '🔁 descanso movido' : 'descansa'}</span>`; }
       else if (out[p.id]) chip = `<span class="st b">salió ${out[p.id]}</span>`;
       else if (lunch[p.id] && !lunch[p.id].r) chip = `<span class="st y">almuerzo ${lunch[p.id].o}</span>`;
+      else if (permFuera(pm, day)) chip = `<span class="st y">📝 permiso desde ${permFuera(pm, day).hm}</span>`;
       else if (a) chip = `<span class="st ${a.late > 0 ? 'y' : 'g'}">${a.t}${!fixedIn(hor) ? '' : a.late > 0 ? ` · +${a.late} min` : ' ✓'}${a.far ? ' · 📍fuera' : ''}</span>`;
       else if (hor && hor.flex) chip = '<span class="st p">flexible · no ha marcado</span>';
       else chip = miss.includes(p) ? '<span class="st" style="background:var(--warn-bg);color:var(--warn)">sin marcar</span>' : `<span class="st p">entra ${hor ? hor.ini : '—'}</span>`;
       if (xo) chip = `<span class="st b">🌙 extra desde ${xo.hm}</span>`;
       const avz = pm.filter(m => m.day === day && m.avance && m.avance.trim()).pop();
-      h += `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${w && hor && hor.medio ? ` · ½ día ${hor.ini}–${hor.fin}${hor.why === 'permiso' ? ' (permiso)' : ''}` : ''}${!xo && xm ? ` · 🌙 extra ${hmin(xm)}` : ''}${avz ? `<span style="display:block;color:#3a3b3c">📝 ${esc(avz.avance)}</span>` : ''}</small></div>${chip}</div>`;
+      h += `<div class="lrow">${av(dirP(p.id))}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${esc(p.puesto || (ROLES[p.role] || {}).l)}${w && hor && hor.medio ? ` · ½ día ${hor.ini}–${hor.fin}${hor.why === 'permiso' ? ' (permiso)' : ''}` : ''}${w && hor && hor.perm ? ` · 📝 permiso ${hor.perm.desde}–${hor.perm.hasta}${permTxt(pm, day)}` : ''}${!xo && xm ? ` · 🌙 extra ${hmin(xm)}` : ''}${avz ? `<span style="display:block;color:#3a3b3c">📝 ${esc(avz.avance)}</span>` : ''}</small></div>${chip}</div>`;
     }
     h += `</div>`;
   }
@@ -882,7 +908,7 @@ const canGrant = sid => { const p = S.staff[sid] || {}; if (!S.me || sid === S.m
 const canDecide = c => canGrant(c.sid);
 function viewCambios() {
   const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)), rest = S.cambios.filter(c => c.estado !== 'pendiente').sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 20);
-  let h = `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="wide" data-cnew2 style="margin:0;flex:1">${ico('swap')} Mover descanso</button><button class="wide ghost" data-pnew2 style="margin:0;flex:1">${ico('cal')} Dar permiso</button></div><div class="note" style="margin:0 0 12px">Cuando alguien necesita faltar, hay dos caminos: <b>mover su descanso</b> (descansa ese día y trabaja otro, sin descuento) o darle un <b>permiso</b> de día completo o medio día, que <b>se descuenta</b>.</div>`;
+  let h = `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="wide" data-cnew2 style="margin:0;flex:1">${ico('swap')} Mover descanso</button><button class="wide ghost" data-pnew2 style="margin:0;flex:1">${ico('cal')} Dar permiso</button></div><div class="note" style="margin:0 0 12px">Cuando alguien necesita faltar, hay dos caminos: <b>mover su descanso</b> (descansa ese día y trabaja otro, sin descuento) o darle un <b>permiso</b> de día completo, medio día o por horas.</div>`;
   h += `<div class="h3" style="margin-top:0">Por aprobar <span>${pend.length}</span></div>` + (pend.length ? pend.map(c => cambioRow(c, true)).join('') : '<div class="empty">Sin solicitudes pendientes.</div>');
   h += `<div class="h3">Historial</div>` + (rest.length ? rest.map(c => cambioRow(c, false)).join('') : '<div class="empty">Todavía no hay cambios.</div>');
   return h;
@@ -1049,24 +1075,35 @@ function permisoSheet(sh) {
   let dayOpts = '';
   if (who) { const hor = S.horarios[who.horario]; for (let i = 0; i < 31; i++) { const d = addDays(today, i); if (worksOn(who, hor, d, S.cambios)) dayOpts += opt(d, niceDate(d) + (i === 0 ? ' · hoy' : ''), sh.day); } }
   const dur = sh.medio || '';
-  return sheetWrap(`<h4>📝 ${forOther ? 'Dar permiso' : 'Pedir permiso'}</h4><div class="sub">El tiempo del permiso se descuenta del pago</div>
+  return sheetWrap(`<h4>📝 ${forOther ? 'Dar permiso' : 'Pedir permiso'}</h4><div class="sub">${forOther ? 'Queda aprobado y registrado' : 'Le llega a tu jefe para aprobarlo'}</div>
   ${forOther ? `<label class="lbl">Persona</label><select id="p_sid" class="fin">${opt('', 'Elige a la persona', sh.sid || '')}${pool.map(p => opt(p.id, p.n + ' · ' + storeN(p.store), sh.sid)).join('')}</select>` : ''}
   ${who ? `<label class="lbl">Día del permiso</label><select id="p_day" class="fin">${dayOpts || opt('', 'No hay días de trabajo próximos', '')}</select>
-  <label class="lbl">¿Cuánto tiempo?</label><div class="ideas" style="margin-bottom:6px">${[['', 'Día completo'], ['am', 'Medio día · mañana'], ['pm', 'Medio día · tarde']].map(([k, l]) => `<button data-pdur="${k}" class="${dur === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-  <div class="rsmall" style="margin:0 0 6px">${dur === 'am' ? 'Falta en la mañana y entra a trabajar a mediodía.' : dur === 'pm' ? 'Trabaja la mañana y se retira a mediodía.' : 'No se presenta ese día.'}</div>
+  <label class="lbl">¿Cuánto tiempo?</label><div class="ideas" style="margin-bottom:6px">${[['', 'Día completo'], ['am', 'Medio día · mañana'], ['pm', 'Medio día · tarde'], ['horas', 'Por horas']].map(([k, l]) => `<button data-pdur="${k}" class="${dur === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+  ${dur === 'horas' ? `<div style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Sale a las</label><input id="p_de" class="fin" type="time" value="${esc(sh.desde || '')}"></div><div style="flex:1"><label class="lbl">Regresa a las</label><input id="p_a" class="fin" type="time" value="${esc(sh.hasta || '')}"></div></div>` : ''}
+  <div class="rsmall" style="margin:0 0 6px">${dur === 'am' ? 'Falta en la mañana y entra a trabajar a mediodía.' : dur === 'pm' ? 'Trabaja la mañana y se retira a mediodía.' : dur === 'horas' ? 'Marca en la app cuando sale y cuando regresa. Si el permiso es al inicio o al final del turno, solo entra más tarde o sale antes.' : 'No se presenta ese día.'}</div>
   <label class="lbl">Motivo</label><input id="p_mot" class="fin" value="${esc(sh.mot || '')}" placeholder="Ej.: cita médica, trámite personal">` : ''}
   ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-psave ${S.busy || !who ? 'disabled' : ''}>${forOther ? 'Guardar y aprobar' : 'Enviar solicitud'}</button><button class="wide ghost" data-close>Cancelar</button>`);
 }
 async function savePermiso() {
   const sh = S.sheet, sid = sh.other ? $('#p_sid').value : S.me.id, day = $('#p_day') && $('#p_day').value, mot = (($('#p_mot') || {}).value || '').trim();
-  Object.assign(sh, { sid, day, mot });
+  const desde = ($('#p_de') || {}).value || '', hasta = ($('#p_a') || {}).value || '';
+  Object.assign(sh, { sid, day, mot, desde, hasta });
   if (!sid || !day) { sh.err = 'Elige el día del permiso'; return render(); }
+  if (sh.medio === 'horas') {
+    if (!desde || !hasta) { sh.err = 'Escribe a qué hora sale y a qué hora regresa'; return render(); }
+    if (toMin(hasta) - toMin(desde) < 15) { sh.err = 'La hora de regreso debe ser después de la salida'; return render(); }
+    const hb = horBase(S.staff[sid], day);
+    if (hb && !hb.flex) {
+      if (toMin(hasta) <= toMin(hb.ini) || toMin(desde) >= toMin(hb.fin)) { sh.err = `Ese horario queda fuera del turno (${hb.ini}–${hb.fin})`; return render(); }
+      if (toMin(desde) <= toMin(hb.ini) && toMin(hasta) >= toMin(hb.fin)) { sh.err = 'Eso cubre todo el turno: elige "Día completo"'; return render(); }
+    }
+  }
   if (mot.length < 3) { sh.err = 'Escribe el motivo'; return render(); }
   const p = S.staff[sid]; S.busy = true; render();
   try {
     if (sh.other && !canGrant(sid)) { S.busy = false; sh.err = 'No puedes dar este permiso. Pídelo desde "Pedir permiso" para que lo apruebe tu jefe.'; return render(); }
     const auto = sh.other && canGrant(sid);
-    await addDoc(C('cambios'), { tipo: 'permiso', sid, dept: p.dept, store: p.store, rest: day, work: null, medio: sh.medio || null, descuento: true, mot, estado: auto ? 'aprobado' : 'pendiente', by: S.me.id, at: serverTimestamp(), ...(auto ? { decidedBy: S.me.id } : {}) });
+    await addDoc(C('cambios'), { tipo: 'permiso', sid, dept: p.dept, store: p.store, rest: day, work: null, medio: sh.medio || null, ...(sh.medio === 'horas' ? { desde, hasta } : {}), mot, estado: auto ? 'aprobado' : 'pendiente', by: S.me.id, at: serverTimestamp(), ...(auto ? { decidedBy: S.me.id } : {}) });
     S.busy = false; S.sheet = null; render(); toast(auto ? 'Permiso registrado' : 'Permiso enviado a tu jefe');
   } catch (e) { console.error(e); S.busy = false; sh.err = e.code || e.message; render(); }
 }
@@ -1126,7 +1163,7 @@ async function tryPin() {
 }
 async function doMark(type, ok) {
   const u = S.me, np = nowParts(), hor = horDe(u, np.day), st = S.stores[u.store] || {};
-  const free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role) || XT.includes(type);
+  const free = ['jefe', 'admin', 'fundador', 'apoyo', 'sistemas'].includes(u.role) || XT.includes(type) || type === 'permsal';
   if (type === 'salida' && hor && hor.flex && !ok) { S.sheet = { kind: 'avance' }; render(); setTimeout(() => { const i = $('#av_tx'); i && i.focus(); }, 50); return; }
   if (type === 'entrada' && !ok && hor && !hor.flex && (np.min >= toMin(hor.fin) || np.min < toMin(hor.ini) - 60)) { S.sheet = { kind: 'xtra', hor }; render(); return; }
   S.busy = true; render();
@@ -1139,7 +1176,7 @@ async function doMark(type, ok) {
   try {
     const b = writeBatch(db);
     const xo = type === 'extrafin' ? openExtra([...(S.myMarksY || []), ...S.myMarks]) : null, xmin = xo ? (xo.day === np.day ? 0 : 1440) + np.min - xo.min : 0;
-    b.set(doc(C('marks')), { sid: u.id, type, day: np.day, hm: np.hm, min: np.min, at: serverTimestamp(), store: u.store, gps, late: lateReal, ...(avance ? { avance } : {}), ...(xo ? { desde: xo.day + ' ' + xo.hm, extraMin: xmin } : {}) });
+    b.set(doc(C('marks')), { sid: u.id, type, day: np.day, hm: np.hm, min: np.min, at: serverTimestamp(), store: u.store, gps, late: lateReal, ...(avance ? { avance } : {}), ...(xo ? { desde: xo.day + ' ' + xo.hm, extraMin: xmin } : {}), ...(type === 'permsal' && hor.perm ? { permId: hor.perm.id, hasta: hor.perm.hasta } : {}), ...(type === 'permreg' && hor.perm ? { permId: hor.perm.id, tarde: Math.max(0, np.min - toMin(hor.perm.hasta)) } : {}) });
     const upd = {};
     if (type === 'entrada') upd.arr = { [u.id]: { t: np.hm, st: u.store, late: lateReal, far: gps.inside === false } };
     if (type === 'salida') upd.out = { [u.id]: np.hm };
@@ -1149,7 +1186,7 @@ async function doMark(type, ok) {
     await b.commit();
     S.busy = false; if (type === 'entrada' || type === 'salida') S.tab = 'inicio'; render();
     if (type === 'entrada') setTimeout(() => { RK = null; const m = myRacha(); if (m && m.cur > 0 && !lateReal) toast(`🔥 ¡${m.cur} ${m.cur === 1 ? 'día' : 'días'} de racha!`); checkBadges(); }, 2600);
-    toast({ extra: `Horas extra desde las ${np.hm} 🌙`, extrafin: `Horas extra terminadas · ${hmin(xmin)}`, entrada: `Entrada registrada ${np.hm}${!g.ok ? ' · sin ubicación' : ''}`, almuerzo: 'Buen provecho 🍽️', regreso: 'Regreso registrado', salida: `Salida registrada ${np.hm} · ¡gracias!` }[type]);
+    toast({ extra: `Horas extra desde las ${np.hm} 🌙`, extrafin: `Horas extra terminadas · ${hmin(xmin)}`, entrada: `Entrada registrada ${np.hm}${!g.ok ? ' · sin ubicación' : ''}`, almuerzo: 'Buen provecho 🍽️', regreso: 'Regreso registrado', permsal: `Salida con permiso ${np.hm} · ¡te esperamos!`, permreg: `Regreso registrado ${np.hm}`, salida: `Salida registrada ${np.hm} · ¡gracias!` }[type]);
   } catch (e) { console.error(e); S.busy = false; render(); toast('No se pudo registrar. Revisa tu internet.'); }
 }
 function readUserForm() {
@@ -1321,7 +1358,7 @@ document.addEventListener('click', async e => {
   if (d.csave !== undefined) return saveCambio();
   if (d.pnew !== undefined) { S.sheet = { kind: 'permiso' }; render(); return; }
   if (d.pnew2 !== undefined) { S.sheet = { kind: 'permiso', other: true }; render(); return; }
-  if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; sh.medio = d.pdur || null; render(); return; }
+  if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; if ($('#p_de')) sh.desde = $('#p_de').value; if ($('#p_a')) sh.hasta = $('#p_a').value; sh.medio = d.pdur || null; render(); return; }
   if (d.psave !== undefined) return savePermiso();
   if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Aprobado' : 'Rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
   // red social
