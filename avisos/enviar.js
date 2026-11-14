@@ -71,6 +71,11 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
         if (c.estado === "pendiente") await enviar(quienDecide(c), { title: `🙋 ${n} pide ${c.tipo === "permiso" ? "permiso" : "mover su descanso"}`, body: `${que(c)}${c.mot ? ` · “${c.mot}”` : ""} · Apruébalo en Gestión`, link, tag: "c-" + d.id });
         else {
           const por = c.decidedBy ? nombre(c.decidedBy) : "Gerencia", ok = c.estado === "aprobado";
+          if (c.estado === "anulado") {
+            await enviar(admins.filter(x => x !== c.decidedBy && x !== c.sid), { title: `⊘ ${por} anuló: ${n}`, body: `${que(c)} · ya no cuenta`, link, tag: "c-" + d.id });
+            await enviar([c.sid], { title: "⊘ Tu permiso o cambio fue anulado", body: `${que(c)} · anuló ${por}. Si lo necesitas, pide uno nuevo.`, link, tag: "c-" + d.id });
+            await d.ref.update({ av: c.estado }); continue;
+          }
           await enviar(admins.filter(x => x !== c.decidedBy && x !== c.sid), { title: `${ok ? "✅" : "✕"} ${por} ${ok ? "aprobó" : "rechazó"}: ${n}`, body: `${que(c)}${c.mot ? ` · “${c.mot}”` : ""}`, link, tag: "c-" + d.id });
           if (c.decidedBy !== c.sid) await enviar([c.sid], { title: ok ? "✅ Tu solicitud fue aprobada" : "✕ Tu solicitud no fue aprobada", body: `${que(c)} · ${ok ? "aprobó" : "rechazó"} ${por}`, link, tag: "c-" + d.id });
         }

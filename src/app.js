@@ -799,8 +799,8 @@ const durTxt = c => c.medio === 'horas' ? `de ${c.desde} a ${c.hasta}` : c.medio
 const cambioTxt = c => c.tipo === 'permiso'
   ? `📝 Permiso <b>${niceDate(c.rest)}</b> · ${durTxt(c)}`
   : `Descansa <b>${niceDate(c.rest)}</b> · trabaja <b>${niceDate(c.work)}</b>`;
-const chipC = c => c.estado === 'pendiente' ? '<span class="st y">Pendiente</span>' : c.estado === 'aprobado' ? `<span class="st g">✓ Aprobado</span>` : '<span class="st p" style="color:var(--warn)">✕ Rechazado</span>';
-const decTxt = c => { if (c.estado === 'pendiente' || !c.decidedBy) return ''; const d = dirP(c.decidedBy); return ` · ${c.estado === 'aprobado' ? 'aprobó' : 'rechazó'} ${esc(first(d.n || '?'))}${c.decidedBy === c.sid ? ' (a sí mismo/a)' : ''}`; };
+const chipC = c => c.estado === 'pendiente' ? '<span class="st y">Pendiente</span>' : c.estado === 'aprobado' ? `<span class="st g">✓ Aprobado</span>` : c.estado === 'anulado' ? '<span class="st p" style="color:#65676b">⊘ Anulado</span>' : '<span class="st p" style="color:var(--warn)">✕ Rechazado</span>';
+const decTxt = c => { if (c.estado === 'pendiente' || !c.decidedBy) return ''; const d = dirP(c.decidedBy); return ` · ${c.estado === 'aprobado' ? 'aprobó' : c.estado === 'anulado' ? 'anuló' : 'rechazó'} ${esc(first(d.n || '?'))}${c.decidedBy === c.sid ? ' (a sí mismo/a)' : ''}`; };
 function viewPerfil() {
   const u = S.me, hor = myHor(), recos = S.posts.filter(x => x.kind === 'reco' && x.to === u.id);
   const cnt = {}; recos.forEach(r => cnt[r.cat] = (cnt[r.cat] || 0) + 1);
@@ -934,7 +934,7 @@ function gcalCard() {
 }
 function cambioRow(c, act) {
   const p = dirP(c.sid);
-  return `<div class="crowc">${av(p)}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${cambioTxt(c)}${c.mot ? ` · “${esc(c.mot)}”` : ''}${act ? '' : decTxt(c)}</small></div>${act ? `<div class="paybtns"><button data-cok="${c.id}">✓</button><button data-cno="${c.id}" style="color:var(--warn)">✕</button></div>` : chipC(c)}</div>`;
+  return `<div class="crowc">${av(p)}<div style="flex:1;min-width:0"><b>${esc(p.n)}</b><small>${cambioTxt(c)}${c.mot ? ` · “${esc(c.mot)}”` : ''}${act ? '' : decTxt(c)}</small></div>${!act && c.estado === 'aprobado' && canGrant(c.sid) ? `<button class="st" data-canul="${c.id}" style="border:0;cursor:pointer;margin-right:6px">Anular</button>` : ''}${act ? `<div class="paybtns"><button data-cok="${c.id}">✓</button><button data-cno="${c.id}" style="color:var(--warn)">✕</button></div>` : chipC(c)}</div>`;
 }
 
 /* ===== HOJAS (bottom sheets) ===== */
@@ -1380,6 +1380,7 @@ document.addEventListener('click', async e => {
   if (d.pnew2 !== undefined) { S.sheet = { kind: 'permiso', other: true }; render(); return; }
   if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; if ($('#p_de')) sh.desde = $('#p_de').value; if ($('#p_a')) sh.hasta = $('#p_a').value; sh.medio = d.pdur || null; render(); return; }
   if (d.psave !== undefined) return savePermiso();
+  if (d.canul) { if (!confirmAnul()) return; try { await updateDoc(D('cambios', d.canul), { estado: 'anulado', decidedBy: S.me.id }); toast('Anulado: ya no cuenta y se quita del calendario'); } catch (er) { toast('No se pudo anular'); } return; }
   if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Aprobado' : 'Rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
   // red social
   if (d.bell !== undefined) return openBell();
@@ -1492,6 +1493,7 @@ function closeMap(save) {
   if (MAP) { MAP.remove(); MAP = null; }
   S.sheet = back; render(); if (save && sh.lat) toast('Ubicación elegida. Toca Guardar.');
 }
+let anulArm = 0; function confirmAnul() { if (Date.now() - anulArm < 3000) return true; anulArm = Date.now(); toast('Toca otra vez para anular'); return false; }
 let delArm = 0; function confirmDel() { if (Date.now() - delArm < 3000) return true; delArm = Date.now(); toast('Toca otra vez para borrar'); return false; }
 document.addEventListener('input', e => {
   const t = e.target;
