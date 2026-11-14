@@ -1093,24 +1093,33 @@ function permisoSheet(sh) {
   const pool = forOther ? Object.values(S.staff).filter(p => p.active !== false && canGrant(p.id)) : [];
   let dayOpts = '';
   if (who) { const hor = S.horarios[who.horario]; for (let i = 0; i < 31; i++) { const d = addDays(today, i); if (worksOn(who, hor, d, S.cambios)) dayOpts += opt(d, niceDate(d) + (i === 0 ? ' · hoy' : ''), sh.day); } }
-  const dur = sh.medio || '';
+  const dur = sh.medio === 'horas' ? 'h-' + (sh.hmode || 'media') : (sh.medio || '');
+  const dSel = sh.day || ((dayOpts.match(/value="([^"]+)"/) || [])[1]), hb = who && dSel ? horBase(who, dSel) : null, fijo = hb && !hb.flex;
+  const tIn = (id, lbl, v) => `<div style="flex:1"><label class="lbl">${lbl}</label><input id="${id}" class="fin" type="time" value="${esc(v || '')}"></div>`;
+  const durBtns = (l) => l.map(([k, t]) => `<button data-pdur="${k}" class="${dur === k ? 'on' : ''}">${t}</button>`).join('');
   return sheetWrap(`<h4>📝 ${forOther ? 'Dar permiso' : 'Pedir permiso'}</h4><div class="sub">${forOther ? 'Queda aprobado y registrado' : 'Le llega a tu jefe para aprobarlo'}</div>
   ${forOther ? `<label class="lbl">Persona</label><select id="p_sid" class="fin">${opt('', 'Elige a la persona', sh.sid || '')}${pool.map(p => opt(p.id, p.n + ' · ' + storeN(p.store), sh.sid)).join('')}</select>` : ''}
   ${who ? `<label class="lbl">Día del permiso</label><select id="p_day" class="fin">${dayOpts || opt('', 'No hay días de trabajo próximos', '')}</select>
-  <label class="lbl">¿Cuánto tiempo?</label><div class="ideas" style="margin-bottom:6px">${[['', 'Día completo'], ['am', 'Medio día · mañana'], ['pm', 'Medio día · tarde'], ['horas', 'Por horas']].map(([k, l]) => `<button data-pdur="${k}" class="${dur === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-  ${dur === 'horas' ? `<div style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Sale a las</label><input id="p_de" class="fin" type="time" value="${esc(sh.desde || '')}"></div><div style="flex:1"><label class="lbl">Regresa a las</label><input id="p_a" class="fin" type="time" value="${esc(sh.hasta || '')}"></div></div>` : ''}
-  <div class="rsmall" style="margin:0 0 6px">${dur === 'am' ? 'Falta en la mañana y entra a trabajar a mediodía.' : dur === 'pm' ? 'Trabaja la mañana y se retira a mediodía.' : dur === 'horas' ? 'Marca en la app cuando sale y cuando regresa. Si el permiso es al inicio o al final del turno, solo entra más tarde o sale antes.' : 'No se presenta ese día.'}</div>
+  <label class="lbl">¿Todo el día?</label><div class="ideas" style="margin-bottom:6px">${durBtns([['', 'Día completo'], ['am', 'Medio día · mañana'], ['pm', 'Medio día · tarde']])}</div>
+  <label class="lbl">¿Solo unas horas?</label><div class="ideas" style="margin-bottom:6px">${durBtns([['h-entra', '⏰ Entrar más tarde'], ['h-sale', '🏃 Salir más temprano'], ['h-media', '↔️ Salir y regresar']])}</div>
+  ${fijo && dur.startsWith('h-') ? `<div class="rsmall" style="margin:0 0 4px">Su turno ese día: <b>${hb.ini}–${hb.fin}</b></div>` : ''}
+  ${dur === 'h-entra' ? `<div style="display:flex;gap:8px">${tIn('p_a', 'Llega a las', sh.hasta)}</div>` : dur === 'h-sale' ? `<div style="display:flex;gap:8px">${tIn('p_de', 'Se va a las', sh.desde)}</div>` : dur === 'h-media' ? `<div style="display:flex;gap:8px">${tIn('p_de', 'Sale a las', sh.desde)}${tIn('p_a', 'Regresa a las', sh.hasta)}</div>` : ''}
+  <div class="rsmall" style="margin:0 0 6px">${dur === 'am' ? 'Falta en la mañana y entra a trabajar a mediodía.' : dur === 'pm' ? 'Trabaja la mañana y se retira a mediodía.' : dur === 'h-entra' ? 'Solo marca su entrada al llegar. No cuenta como tardanza ni rompe la racha.' : dur === 'h-sale' ? 'Marca su salida a esa hora, como un día normal.' : dur === 'h-media' ? 'Marca en la app cuando sale y cuando regresa.' : 'No se presenta ese día.'}</div>
   <label class="lbl">Motivo</label><input id="p_mot" class="fin" value="${esc(sh.mot || '')}" placeholder="Ej.: cita médica, trámite personal">` : ''}
   ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-psave ${S.busy || !who ? 'disabled' : ''}>${forOther ? 'Guardar y aprobar' : 'Enviar solicitud'}</button><button class="wide ghost" data-close>Cancelar</button>`);
 }
 async function savePermiso() {
   const sh = S.sheet, sid = sh.other ? $('#p_sid').value : S.me.id, day = $('#p_day') && $('#p_day').value, mot = (($('#p_mot') || {}).value || '').trim();
-  const desde = ($('#p_de') || {}).value || '', hasta = ($('#p_a') || {}).value || '';
+  let desde = ($('#p_de') || {}).value || '', hasta = ($('#p_a') || {}).value || '';
   Object.assign(sh, { sid, day, mot, desde, hasta });
   if (!sid || !day) { sh.err = 'Elige el día del permiso'; return render(); }
   if (sh.medio === 'horas') {
+    const hm = sh.hmode || 'media', hb0 = horBase(S.staff[sid], day);
+    if (hm !== 'media' && (!hb0 || hb0.flex)) { sh.err = 'Esta persona no tiene horario fijo ese día: usa "Salir y regresar"'; return render(); }
+    if (hm === 'entra') { if (!hasta) { sh.err = 'Escribe a qué hora llega'; return render(); } desde = hb0.ini; }
+    if (hm === 'sale') { if (!desde) { sh.err = 'Escribe a qué hora se va'; return render(); } hasta = hb0.fin; }
     if (!desde || !hasta) { sh.err = 'Escribe a qué hora sale y a qué hora regresa'; return render(); }
-    if (toMin(hasta) - toMin(desde) < 15) { sh.err = 'La hora de regreso debe ser después de la salida'; return render(); }
+    if (toMin(hasta) - toMin(desde) < 15) { sh.err = hm === 'entra' ? `Debe llegar después de su entrada (${desde})` : hm === 'sale' ? `Debe irse antes de su salida (${hasta})` : 'La hora de regreso debe ser después de la salida'; return render(); }
     const hb = horBase(S.staff[sid], day);
     if (hb && !hb.flex) {
       if (toMin(hasta) <= toMin(hb.ini) || toMin(desde) >= toMin(hb.fin)) { sh.err = `Ese horario queda fuera del turno (${hb.ini}–${hb.fin})`; return render(); }
@@ -1378,7 +1387,7 @@ document.addEventListener('click', async e => {
   if (d.pnew !== undefined) { S.sheet = { kind: 'permiso' }; render(); return; }
   if (d.gcalsave !== undefined) { const id = ($('#gcal_id').value || '').trim(); if (id && !/^[^\s@]+@[^\s@]+$/.test(id)) { toast('Ese ID no parece válido'); return; } try { await setDoc(D('meta', 'calendario'), { id, estado: 'pendiente', msg: '' }, { merge: true }); toast(id ? 'Calendario guardado' : 'Calendario desconectado'); } catch (er) { toast('No se pudo guardar'); } return; }
   if (d.pnew2 !== undefined) { S.sheet = { kind: 'permiso', other: true }; render(); return; }
-  if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; if ($('#p_de')) sh.desde = $('#p_de').value; if ($('#p_a')) sh.hasta = $('#p_a').value; sh.medio = d.pdur || null; render(); return; }
+  if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; if ($('#p_de')) sh.desde = $('#p_de').value; if ($('#p_a')) sh.hasta = $('#p_a').value; if ((d.pdur || '').startsWith('h-')) { sh.medio = 'horas'; sh.hmode = d.pdur.slice(2); } else { sh.medio = d.pdur || null; sh.hmode = null; } render(); return; }
   if (d.psave !== undefined) return savePermiso();
   if (d.canul) { if (!confirmAnul()) return; try { await updateDoc(D('cambios', d.canul), { estado: 'anulado', decidedBy: S.me.id }); toast('Anulado: ya no cuenta y se quita del calendario'); } catch (er) { toast('No se pudo anular'); } return; }
   if (d.cok || d.cno) { try { await updateDoc(D('cambios', d.cok || d.cno), { estado: d.cok ? 'aprobado' : 'rechazado', decidedBy: S.me.id }); toast(d.cok ? 'Aprobado' : 'Rechazado'); } catch (er) { toast('No se pudo guardar'); } return; }
@@ -1510,6 +1519,7 @@ document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'u_s') { const h = $('#u_h'); if (h) h.value = suggestHor(t.value); }
   if (t.id === 'c_sid' || t.id === 'p_sid') { S.sheet.sid = t.value; render(); }
+  if (t.id === 'p_day' && S.sheet) { S.sheet.day = t.value; if ($('#p_mot')) S.sheet.mot = $('#p_mot').value; if ($('#p_de')) S.sheet.desde = $('#p_de').value; if ($('#p_a')) S.sheet.hasta = $('#p_a').value; render(); }
   if (t.id === 'h_flex' || t.id === 'h_fi') { const sh = S.sheet; sh.h = { ...(sh.h || { ini: '08:00', fin: '17:00', lunch: 0, dias: [1, 2, 3, 4, 5, 6], tol: 5 }), n: $('#h_n').value, flex: $('#h_flex').checked, flexIni: $('#h_fi') ? $('#h_fi').checked : true }; render(); }
   if (t.id === 'f_st') { readFoto(); render(); if (t.value === 'fuera') setTimeout(() => { const i = $('#f_lugar'); i && i.focus(); }, 50); }
   if (t.dataset && t.dataset.photo !== undefined && t.files[0]) {
