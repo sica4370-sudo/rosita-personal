@@ -191,6 +191,7 @@ function startListeners() {
   const from = addDays(day, -(VENTANA + 5));
   loadHist();
   S.unsub.push(onSnapshot(query(C('cambios'), where('rest', '>=', from)), s => { S.cambios = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
+  if (isAdmin()) S.unsub.push(onSnapshot(D('meta', 'calendario'), s => { S.gcal = s.exists() ? s.data() : {}; rerender(); }, () => { S.gcal = null; }));
 }
 // Historial de llegadas para las rachas (una sola lectura al entrar; hoy llega en vivo)
 async function loadHist() {
@@ -907,11 +908,29 @@ function viewStores() {
 const canGrant = sid => { const p = S.staff[sid] || {}; if (!S.me || sid === S.me.id) return false; if (isAdmin()) return true; return role() === 'jefe' && p.dept === S.me.dept && !['jefe', 'admin', 'fundador'].includes(p.role); };
 const canDecide = c => canGrant(c.sid);
 function viewCambios() {
-  const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)), rest = S.cambios.filter(c => c.estado !== 'pendiente').sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 20);
+  const pend = S.cambios.filter(c => c.estado === 'pendiente' && canDecide(c)), rest = S.cambios.filter(c => c.estado !== 'pendiente').sort((a, b) => b.rest.localeCompare(a.rest)).slice(0, 40);
   let h = `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="wide" data-cnew2 style="margin:0;flex:1">${ico('swap')} Mover descanso</button><button class="wide ghost" data-pnew2 style="margin:0;flex:1">${ico('cal')} Dar permiso</button></div><div class="note" style="margin:0 0 12px">Cuando alguien necesita faltar, hay dos caminos: <b>mover su descanso</b> (descansa ese día y trabaja otro, sin descuento) o darle un <b>permiso</b> de día completo, medio día o por horas.</div>`;
   h += `<div class="h3" style="margin-top:0">Por aprobar <span>${pend.length}</span></div>` + (pend.length ? pend.map(c => cambioRow(c, true)).join('') : '<div class="empty">Sin solicitudes pendientes.</div>');
-  h += `<div class="h3">Historial</div>` + (rest.length ? rest.map(c => cambioRow(c, false)).join('') : '<div class="empty">Todavía no hay cambios.</div>');
+  // Registro de ausencias: lo que viene (aprobado) agrupado por día, y el historial de lo que ya pasó
+  const hoy = nowParts().day, prox = S.cambios.filter(c => c.estado === 'aprobado' && c.rest >= hoy).sort((a, b) => a.rest.localeCompare(b.rest));
+  h += `<div class="h3">Próximas ausencias <span>${prox.length}</span></div>`;
+  if (!prox.length) h += '<div class="empty">Nadie tiene permiso ni descanso movido en los próximos días.</div>';
+  let dcur = null;
+  for (const c of prox) { if (c.rest !== dcur) { dcur = c.rest; h += `<div class="gh" style="margin:12px 2px 4px">${c.rest === hoy ? 'Hoy · ' : c.rest === addDays(hoy, 1) ? 'Mañana · ' : ''}${niceDate(c.rest)}</div>`; } h += cambioRow(c, false); }
+  const past = rest.filter(c => !(c.estado === 'aprobado' && c.rest >= hoy));
+  h += `<div class="h3">Historial</div>` + (past.length ? past.map(c => cambioRow(c, false)).join('') : '<div class="empty">Todavía no hay cambios.</div>');
+  if (isAdmin()) h += gcalCard();
   return h;
+}
+function gcalCard() {
+  const g = S.gcal || {}, ok = g.estado === 'ok', err = g.estado === 'error';
+  return `<div class="h3">📅 Google Calendar</div><div class="note" style="margin:0 0 12px">
+  ${ok ? `<b style="color:var(--ok,#1a7f37)">✓ Conectado.</b> Cada permiso o cambio de descanso aprobado aparece solo en tu calendario <b>Permisos D'La Rossa</b>.` : err ? `<b style="color:var(--warn)">No se pudo escribir en el calendario.</b> ${esc(g.msg || '')}` : g.id ? 'Calendario guardado. En unos minutos se conecta…' : 'Conecta un calendario de Google para que cada ausencia aprobada aparezca ahí y te avise en todos tus dispositivos.'}
+  ${ok ? '' : `<ol style="margin:8px 0 0 18px;padding:0;line-height:1.5">
+  <li>En Google Calendar (computadora) crea un calendario nuevo llamado <b>Permisos D'La Rossa</b>.</li>
+  <li>En su <b>Configuración y uso compartido → Compartir con personas</b> agrega este correo con permiso <b>Hacer cambios en los eventos</b>:<br><code style="word-break:break-all;user-select:all">${esc(g.sa || 'aparece aquí en unos minutos…')}</code></li>
+  <li>Copia el <b>ID del calendario</b> (sección Integrar calendario) y pégalo aquí.</li></ol>`}</div>
+  <input id="gcal_id" class="fin" placeholder="ID del calendario (…@group.calendar.google.com)" value="${esc(g.id || '')}"><button class="wide ghost" data-gcalsave style="margin-top:8px">Guardar calendario</button>`;
 }
 function cambioRow(c, act) {
   const p = dirP(c.sid);
@@ -1357,6 +1376,7 @@ document.addEventListener('click', async e => {
   if (d.cnew2 !== undefined) { S.sheet = { kind: 'cambio', other: true }; render(); return; }
   if (d.csave !== undefined) return saveCambio();
   if (d.pnew !== undefined) { S.sheet = { kind: 'permiso' }; render(); return; }
+  if (d.gcalsave !== undefined) { const id = ($('#gcal_id').value || '').trim(); if (id && !/^[^\s@]+@[^\s@]+$/.test(id)) { toast('Ese ID no parece válido'); return; } try { await setDoc(D('meta', 'calendario'), { id, estado: 'pendiente', msg: '' }, { merge: true }); toast(id ? 'Calendario guardado' : 'Calendario desconectado'); } catch (er) { toast('No se pudo guardar'); } return; }
   if (d.pnew2 !== undefined) { S.sheet = { kind: 'permiso', other: true }; render(); return; }
   if (d.pdur !== undefined) { const sh = S.sheet; if ($('#p_day')) sh.day = $('#p_day').value; if ($('#p_mot')) sh.mot = $('#p_mot').value; if ($('#p_de')) sh.desde = $('#p_de').value; if ($('#p_a')) sh.hasta = $('#p_a').value; sh.medio = d.pdur || null; render(); return; }
   if (d.psave !== undefined) return savePermiso();

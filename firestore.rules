@@ -122,6 +122,13 @@ service cloud.firestore {
       allow read, write: if hasMe() && me().sid == sid;
     }
 
+    // Conexión con Google Calendar: Gerencia guarda el ID del calendario; el servidor escribe el estado
+    match /meta/calendario {
+      allow read: if isAdmin();
+      allow write: if isAdmin() && request.resource.data.keys().hasOnly(['id', 'estado', 'msg', 'sa', 'en'])
+        && request.resource.data.id is string && request.resource.data.estado == 'pendiente';
+    }
+
     // Estado del envío de avisos (lo maneja solo el servidor)
     match /meta/push {
       allow read, write: if false;

@@ -4,6 +4,9 @@
    2) Publicaciones nuevas que interesan a todos: anuncios (a quien va dirigido) y Rosita Noticias / Arena (a todos).
    3) Cumpleaños del día (una vez, desde las 8:00 a. m.).
    4) Limpieza: borra avisos de más de 21 días y celulares que ya no existen.
+   5) Permisos y descansos: avisa a quien debe aprobar, avisa a Gerencia y a la persona cuando se decide,
+      manda a las 7:00 a. m. el resumen de quién falta hoy y copia cada ausencia aprobada a Google Calendar
+      (calendario que Gerencia conecta en Gestión → Descansos; se guarda en meta/calendario).
    Necesita el secreto ROSITA_SERVICE_ACCOUNT (llave de una cuenta de servicio del proyecto rosita-personal). */
 const admin = require("firebase-admin");
 const KEY = process.env.ROSITA_SERVICE_ACCOUNT;
@@ -47,6 +50,79 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
     }
   }
 
+  async function ausencias() {
+    const DC = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"], MS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+    const addD = (ds, n) => { const d = new Date(ds + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    const nice = ds => { const d = new Date(ds + "T12:00:00Z"); return `${DC[d.getUTCDay()]} ${d.getUTCDate()} ${MS[d.getUTCMonth()]}`; };
+    const MEDIO = { am: "medio día (mañana)", pm: "medio día (tarde)" };
+    const storesS = await db.collection("stores").get(), tienda = id => ((storesS.docs.find(d => d.id === id) || { data: () => ({}) }).data().n || "");
+    const esJefe = p => ["jefe", "admin", "fundador"].includes((p || {}).role);
+    const admins = activos.filter(p => p.role === "admin").map(p => p.id);
+    const quienDecide = c => { const p = staff[c.sid] || {}; return [...admins, ...(esJefe(p) ? [] : activos.filter(j => j.role === "jefe" && j.dept === p.dept).map(j => j.id))].filter(x => x !== c.sid); };
+    const que = c => c.tipo === "permiso" ? `permiso ${nice(c.rest)} · ${c.medio ? MEDIO[c.medio] : "día completo"}` : `descansa ${nice(c.rest)} y trabaja ${nice(c.work)}`;
+    const cs = await db.collection("cambios").where("rest", ">=", addD(G.day, -3)).get();
+
+    // Avisos según el estado (una sola vez por estado; lo viejo se marca sin avisar)
+    for (const d of cs.docs) {
+      const c = d.data(); if (c.av === c.estado) continue;
+      const fresco = now - ms(c.at) < 48 * 3600e3 || c.estado !== "pendiente";
+      if (fresco) {
+        const n = nombre(c.sid), link = APP;
+        if (c.estado === "pendiente") await enviar(quienDecide(c), { title: `🙋 ${n} pide ${c.tipo === "permiso" ? "permiso" : "mover su descanso"}`, body: `${que(c)}${c.mot ? ` · “${c.mot}”` : ""} · Apruébalo en Gestión`, link, tag: "c-" + d.id });
+        else {
+          const por = c.decidedBy ? nombre(c.decidedBy) : "Gerencia", ok = c.estado === "aprobado";
+          await enviar(admins.filter(x => x !== c.decidedBy && x !== c.sid), { title: `${ok ? "✅" : "✕"} ${por} ${ok ? "aprobó" : "rechazó"}: ${n}`, body: `${que(c)}${c.mot ? ` · “${c.mot}”` : ""}`, link, tag: "c-" + d.id });
+          if (c.decidedBy !== c.sid) await enviar([c.sid], { title: ok ? "✅ Tu solicitud fue aprobada" : "✕ Tu solicitud no fue aprobada", body: `${que(c)} · ${ok ? "aprobó" : "rechazó"} ${por}`, link, tag: "c-" + d.id });
+        }
+      }
+      await d.ref.update({ av: c.estado });
+    }
+
+    // Resumen de las 7:00 a. m.: quién falta hoy (Gerencia ve todo; cada jefe, su área)
+    let hecho = meta.ausHoy || "";
+    if (G.h >= 7 && hecho !== G.day) {
+      const trab = await db.collection("cambios").where("work", "==", G.day).get();
+      const items = [
+        ...cs.docs.map(d => d.data()).filter(c => c.estado === "aprobado" && c.rest === G.day).map(c => ({ c, t: `${nombre(c.sid)}${c.tipo === "permiso" ? ` (${c.medio ? MEDIO[c.medio] : "no viene"})` : " (descansa, movió su descanso)"}` })),
+        ...trab.docs.map(d => d.data()).filter(c => c.estado === "aprobado").map(c => ({ c, t: `${nombre(c.sid)} trabaja hoy en lugar de su descanso` }))];
+      const para = {};
+      for (const it of items) { const p = staff[it.c.sid] || {}; [...admins, ...activos.filter(j => j.role === "jefe" && j.dept === p.dept).map(j => j.id)].filter(x => x !== it.c.sid).forEach(x => (para[x] = para[x] || []).push(it.t)); }
+      for (const [sid, l] of Object.entries(para)) await enviar([sid], { title: `📋 Hoy ${l.length === 1 ? "hay 1 cambio" : `hay ${l.length} cambios`} en el personal`, body: l.join(" · "), link: APP, tag: "aus-" + G.day });
+      hecho = G.day;
+    }
+
+    // Google Calendar
+    const calRef = db.doc("meta/calendario"), cal = (await calRef.get()).data() || {}, SA = JSON.parse(KEY).client_email;
+    if (cal.sa !== SA) await calRef.set({ sa: SA }, { merge: true });
+    if (cal.id) {
+      try {
+        const { JWT } = require("google-auth-library");
+        const k = JSON.parse(KEY), jwt = new JWT({ email: k.client_email, key: k.private_key, scopes: ["https://www.googleapis.com/auth/calendar.events"] });
+        const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events`;
+        const api = async (url, method, body) => { const r = await jwt.request({ url, method, data: body, validateStatus: () => true }); if (r.status >= 300 && !(method === "DELETE" && [404, 410].includes(r.status))) throw new Error(`${r.status} ${JSON.stringify(r.data && r.data.error && r.data.error.message || r.data)}`); return r.data; };
+        let n = 0;
+        for (const d of cs.docs) {
+          const c = d.data(), quiero = c.estado === "aprobado" && c.rest >= G.day;
+          if (quiero && !c.gcal) {
+            const p = staff[c.sid] || {}, per = c.tipo === "permiso";
+            const ev = await api(base, "POST", {
+              summary: per ? `📝 ${nombre(c.sid)} · ${c.medio ? MEDIO[c.medio] : "falta todo el día"}` : `🔄 ${nombre(c.sid)} descansa (trabaja el ${nice(c.work)})`,
+              description: [`Tienda/área: ${tienda(p.store) || p.dept || "—"}`, c.mot ? `Motivo: ${c.mot}` : "", per ? "Permiso con descuento" : "Cambio de descanso, sin descuento", `Aprobó: ${c.decidedBy ? nombre(c.decidedBy) : "—"}`, "Rosita · Personal"].filter(Boolean).join("\n"),
+              start: { date: c.rest }, end: { date: addD(c.rest, 1) }, transparency: "transparent",
+              extendedProperties: { private: { rosita: d.id } } });
+            await d.ref.update({ gcal: ev.id }); n++;
+          } else if (!quiero && c.gcal && c.estado !== "aprobado") { await api(`${base}/${c.gcal}`, "DELETE"); await d.ref.update({ gcal: FieldValue.delete() }); n++; }
+        }
+        if (cal.estado !== "ok" || n) await calRef.set({ estado: "ok", msg: "", en: now }, { merge: true });
+      } catch (e) {
+        console.error("calendario", e.message);
+        const m = /404|notFound|Not Found/.test(e.message) ? "No encuentro ese calendario: revisa el ID y que esté compartido con el correo de la app." : /403|writer|forbidden|disabled|has not been used/i.test(e.message) ? (/disabled|has not been used/i.test(e.message) ? "Falta activar Google Calendar API en el proyecto." : "El calendario no está compartido con permiso para hacer cambios.") : e.message.slice(0, 200);
+        await calRef.set({ estado: "error", msg: m, en: now }, { merge: true });
+      }
+    }
+    return hecho;
+  }
+
   // 1) Avisos personales
   const pend = await db.collection("avisos").where("sent", "==", false).limit(300).get();
   const lote = db.batch(); let nLote = 0;
@@ -84,7 +160,9 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
     for (const p of activos.filter(x => x.cumple === G.md)) await enviar(activos.filter(x => x.id !== p.id).map(x => x.id), { title: `🎂 Hoy cumple años ${nombre(p.id)}`, body: "Entra a Rosita y déjale tu saludo 🎉", link: APP, tag: "cumple-" + p.id });
     cumple = G.day;
   }
-  await db.doc("meta/push").set({ last: maxAt, cumple, en: now }, { merge: true });
+  // 5) Permisos y descansos
+  const ausHoy = await ausencias();
+  await db.doc("meta/push").set({ last: maxAt, cumple, ausHoy, en: now }, { merge: true });
 
   // 4) Limpieza
   for (const [sid, tks] of Object.entries(malos)) { try { await db.doc("privado/" + sid).update(...[...new Set(tks)].flatMap(t => [new FieldPath("tk", t), FieldValue.delete()])); } catch (e) { console.error("limpieza", e.message); } }
