@@ -1,0 +1,25 @@
+# Publica las reglas de seguridad de Firestore cada vez que cambia firestore.rules.
+# Usa la misma llave de los avisos (ROSITA_SERVICE_ACCOUNT).
+name: Reglas de seguridad
+on:
+  push:
+    branches: [main]
+    paths: [firestore.rules, firestore.indexes.json]
+  workflow_dispatch:
+jobs:
+  reglas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Credenciales
+        run: printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+        env:
+          SA: ${{ secrets.ROSITA_SERVICE_ACCOUNT }}
+      - name: Publicar reglas
+        run: npx -y firebase-tools@15 deploy --only firestore:rules --project rosita-personal --non-interactive
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
