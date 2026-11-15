@@ -261,7 +261,7 @@
   function programar(){ if (pend) return; pend = true; (window.requestAnimationFrame || setTimeout)(function(){ pend = false; pintar(); }); }
   if (window.MutationObserver) new MutationObserver(programar).observe(document.documentElement, { childList:true, subtree:true });
   document.addEventListener("DOMContentLoaded", pintar);
-  window.RositaLabs = { acerca: abrirAcerca, pintar: pintar, navidad: NAV };
+  window.RositaLabs = { acerca: abrirAcerca, pintar: pintar, navidad: NAV, mascota: MASCOTA };
 
   /* ---------- Intro ---------- */
   var key = "rli_" + APP.toLowerCase().replace(/[^a-z0-9]+/g, "_");

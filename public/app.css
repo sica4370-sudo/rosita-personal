@@ -16,6 +16,7 @@ select.fin{appearance:auto}
 .rlwm{height:11px;width:auto;display:block}
 .firma .rlwm{height:11px}
 .sheet.about img.r{width:92px;height:93px}
+.sheet.about .fies{font-weight:600;font-size:14px;color:#FFD27A;margin-top:8px}
 .sheet-bg{position:fixed;z-index:30;max-width:560px;margin:0 auto}
 .toast{z-index:60}
 /* gestión */

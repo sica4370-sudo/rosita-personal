@@ -1007,8 +1007,8 @@ function sheetHtml() {
   if (sh.kind === 'seen') return seenSheet(sh);
   if (sh.kind === 'perfil') return profSheet(sh);
   if (sh.kind === 'texto') return textoSheet(sh);
-  if (sh.kind === 'about') return sheetWrap(`<img class="r" src="rosita.svg" alt=""><div class="awm"><img class="rlwm" src="wordmark-dark.svg" alt="rosita labs" style="width:160px;height:auto"></div><div class="app">Personal</div>
-    <div class="rows"><div class="row"><span>Versión</span><span>${VERSION}</span></div><div class="row"><span>Para</span><span>Textiles D'La Rossa</span></div><div class="row"><span>Hecho por</span><span>Rosita Labs</span></div></div><div class="made">Hecho en Quetzaltenango, Guatemala</div><button class="aclose" data-close>Cerrar</button>`, 'about');
+  if (sh.kind === 'about') return sheetWrap(`<img class="r" src="${(window.RositaLabs && window.RositaLabs.mascota) || 'rosita.svg'}" alt=""><div class="awm"><img class="rlwm" src="wordmark-dark.svg" alt="rosita labs" style="width:160px;height:auto"></div><div class="app">Personal</div>
+    <div class="rows"><div class="row"><span>Versión</span><span>${VERSION}</span></div><div class="row"><span>Para</span><span>Textiles D'La Rossa</span></div><div class="row"><span>Hecho por</span><span>Rosita Labs</span></div></div>${window.RositaLabs && window.RositaLabs.navidad ? '<div class="fies">¡Felices fiestas de parte de Rosita Labs!</div>' : ''}<div class="made">Hecho en Quetzaltenango, Guatemala</div><button class="aclose" data-close>Cerrar</button>`, 'about');
   if (sh.kind === 'user') return userSheet(sh);
   if (sh.kind === 'hor') return horSheet(sh);
   if (sh.kind === 'store') return storeSheet(sh);
