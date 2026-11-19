@@ -197,6 +197,9 @@ function startListeners() {
   const from = addDays(day, -(VENTANA + 5));
   loadHist();
   S.unsub.push(onSnapshot(query(C('cambios'), where('rest', '>=', from)), s => { S.cambios = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
+  // Novedades que ya vio esta persona
+  S.novVistas = null;
+  getDoc(D('privado', S.me.id)).then(d => { S.novVistas = (d.exists() && d.data().nov) || {}; render(); }).catch(() => { S.novVistas = {}; render(); });
   // Salidas que marcó Gerencia o un jefe por alguien que olvidó marcarla
   if (!isSup()) S.unsub.push(onSnapshot(query(C('salidasGer'), where('sid', '==', S.me.id)), s => { S.salGer = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.day + a.hm).localeCompare(b.day + b.hm)); checkSalGer(); rerender(); }, e => console.error('salidasGer', e)));
   if (isMgr()) {
@@ -972,8 +975,29 @@ async function saveDarSal() {
     S.busy = false; S.sheet = null; render(); toast(`Salida registrada · ${first(p.n)} recibirá el aviso`);
   } catch (e) { console.error(e); S.busy = false; sh.err = 'No se pudo registrar: ' + (e.code || e.message); render(); }
 }
+/* ====== Novedades de la app: aviso que cada persona ve una sola vez al abrir la app ====== */
+const NOVEDADES = [
+  { id: 'sin-almuerzo-2026-11', ic: '🕐', t: 'Cambio en el marcaje',
+    tx: 'A partir de ahora solo marcas tu <b>entrada</b> y tu <b>salida</b>. Ya no se marca la salida a almuerzo.',
+    tx2: 'Recuerda marcar tu salida todos los días al terminar tu jornada. Si se te olvida, tu jefe tendrá que marcarla por ti y te llegará un aviso.',
+    para: p => !isSup(p) },
+];
+const novVista = id => !!((S.novVistas || {})[id]) || (() => { try { return !!localStorage.getItem('rp_nov_' + S.me.id + '_' + id); } catch (e) { return false; } })();
+const novPend = () => S.novVistas ? NOVEDADES.find(n => (!n.para || n.para(S.me)) && !novVista(n.id)) : null;
+function novSheet(sh) {
+  const n = NOVEDADES.find(x => x.id === sh.id) || {};
+  return sheetWrap(`<div style="text-align:center"><div style="font-size:46px">${n.ic || '📣'}</div><h4>${esc(n.t || 'Novedades')}</h4></div>
+  <div class="note" style="margin:10px 0">${n.tx || ''}</div>${n.tx2 ? `<div class="sub" style="text-align:center;margin:10px 0">${n.tx2}</div>` : ''}
+  <button class="wide" data-novok="${n.id}">👍 Entendido</button>`);
+}
+async function novOk(id) {
+  S.novVistas = { ...(S.novVistas || {}), [id]: Date.now() }; S.sheet = null; render();
+  try { localStorage.setItem('rp_nov_' + S.me.id + '_' + id, '1'); } catch (e) { }
+  try { await setDoc(D('privado', S.me.id), { nov: { [id]: serverTimestamp() } }, { merge: true }); } catch (e) { console.error('nov', e); }
+}
 // Del lado de la persona: aviso al abrir la app hasta que lo confirme
-const salPend = () => (S.salGer || []).filter(x => !x.visto);
+const SAL_OK = new Set(); // confirmados en este celular (mientras el servidor guarda la hora)
+const salPend = () => (S.salGer || []).filter(x => !x.visto && !SAL_OK.has(x.id));
 function checkSalGer() { if (S.phase === 'app' && !S.sheet && salPend().length) render(); }
 function salGerSheet() {
   const pend = salPend(), mes = nowParts().day.slice(0, 7), nMes = (S.salGer || []).filter(x => x.day.startsWith(mes)).length;
@@ -986,7 +1010,7 @@ function salGerSheet() {
 }
 async function salGerOk() {
   const pend = salPend(); S.busy = true; render();
-  try { const b = writeBatch(db); pend.forEach(x => b.update(D('salidasGer', x.id), { visto: serverTimestamp() })); await b.commit(); pend.forEach(x => { x.visto = { seconds: Date.now() / 1000 }; }); S.busy = false; S.sheet = null; render(); toast('¡Gracias! Hoy no se te olvida 🔵'); }
+  try { const b = writeBatch(db); pend.forEach(x => b.update(D('salidasGer', x.id), { visto: serverTimestamp() })); pend.forEach(x => SAL_OK.add(x.id)); await b.commit(); pend.forEach(x => SAL_OK.add(x.id)); S.busy = false; S.sheet = null; render(); toast('¡Gracias! Hoy no se te olvida 🔵'); }
   catch (e) { console.error(e); S.busy = false; render(); toast('No se pudo guardar. Revisa tu internet.'); }
 }
 function viewLive() {
@@ -1098,6 +1122,7 @@ function sheetHtml() {
   if (sh.kind === 'cambio') return cambioSheet(sh);
   if (sh.kind === 'darsal') return darSalSheet(sh);
   if (sh.kind === 'salger') return salGerSheet(sh);
+  if (sh.kind === 'novedad') return novSheet(sh);
   if (sh.kind === 'permiso') return permisoSheet(sh);
   if (sh.kind === 'pin') return sheetWrap(`<h4>Cambiar mi PIN</h4><div class="sub">Necesitas tu PIN actual</div>
     <input id="p_old" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="PIN actual"><input id="p_new" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="PIN nuevo"><input id="p_new2" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="Repite el PIN nuevo">
@@ -1285,6 +1310,7 @@ function render() {
   if (S.phase === 'setup') { root.innerHTML = viewSetup() + sheetHtml(); return; }
   // El aviso de salida marcada por otra persona aparece en cuanto no haya otra ventana abierta
   if (S.phase === 'app' && !S.sheet && S.me && salPend().length) S.sheet = { kind: 'salger' };
+  if (S.phase === 'app' && !S.sheet && S.me && novPend()) S.sheet = { kind: 'novedad', id: novPend().id };
   if (S.phase === 'login') { root.innerHTML = viewLogin() + sheetHtml(); if (S.q) filterWho(); return; }
   if (comUnsub && !(S.sheet && S.sheet.kind === 'coms')) { comUnsub(); comUnsub = null; }
   const t = S.tab, gt = gestionTabs().length, bc = bellCount();
@@ -1485,6 +1511,7 @@ document.addEventListener('click', async e => {
   if (d.darsal) { const [sid, day] = d.darsal.split('|'), x = salidasPend().find(y => y.sid === sid && y.day === day); if (!x) return toast('Ya tiene su salida'); S.sheet = { kind: 'darsal', ...x }; render(); return; }
   if (d.dssave !== undefined) return saveDarSal();
   if (d.salok !== undefined) return salGerOk();
+  if (d.novok) return novOk(d.novok);
   if (d.avok !== undefined) { const v = ($('#av_tx') || {}).value || ''; S.sheet = null; return doMark('salida', v.trim() || ' '); }
   if (d.xyes !== undefined) { S.sheet = null; return doMark('extra'); }
   if (d.xno !== undefined) { S.sheet = null; return doMark('entrada', true); }
