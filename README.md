@@ -32,7 +32,8 @@ Base de datos: Cloud Firestore (plan gratuito Spark). Las fotos se guardan compr
 
 La primera vez que se abre la app pide crear la cuenta de **Gerencia** (nombre, puesto y PIN). Esa cuenta crea a todo el personal en **Gestión → Personas**: nombre, puesto, rol, departamento, tienda, horario, día de descanso y PIN inicial.
 
-- **Horarios** (Gestión → Horarios): plantillas con entrada, salida, días que se trabaja, almuerzo y tolerancia.
+- **Horarios** (Gestión → Horarios): plantillas con entrada, salida, días que se trabaja y tolerancia (el almuerzo está desactivado por ahora: `LUNCH_ON` en `src/app.js`).
+- **Salidas sin marcar** (Gestión → En vivo): Gerencia o el jefe del área da la salida a quien la olvidó; la persona ve un aviso al abrir la app y confirma que lo leyó (`salidasGer`).
 - **Tiendas** (Gestión → Tiendas): en cada tienda, toca *Usar mi ubicación actual* estando ahí, para que el marcaje verifique que la persona está en su tienda.
 - **Descansos** (Gestión → Descansos): cuando alguien necesita faltar, en vez de descontarle se **mueve su descanso** a otra fecha. Lo aprueba Gerencia o el jefe de su departamento.
 

@@ -213,8 +213,8 @@ const ms = t => t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : 0)
     const a = d.data(), viejo = now - ms(a.at) > 6 * 3600e3;
     if (!viejo && a.to && tokens[a.to]) {
       const quien = nombre(a.from);
-      const title = { comment: `💬 ${quien} comentó tu publicación`, reply: `💬 ${quien} también comentó`, mention: `@ ${quien} te mencionó`, reco: `👏 ${quien} te dio un reconocimiento` }[a.type] || `🔔 ${quien}`;
-      await enviar([a.to], { title, body: a.tx || "", link: `${APP}?p=${a.post || ""}${["comment", "reply"].includes(a.type) || a.c ? "&c=1" : ""}`, tag: a.post ? "p-" + a.post : "" });
+      const title = { comment: `💬 ${quien} comentó tu publicación`, reply: `💬 ${quien} también comentó`, mention: `@ ${quien} te mencionó`, reco: `👏 ${quien} te dio un reconocimiento`, salida: `⏰ ${quien} registró tu salida` }[a.type] || `🔔 ${quien}`;
+      await enviar([a.to], { title, body: a.tx || "", link: a.type === "salida" ? APP : `${APP}?p=${a.post || ""}${["comment", "reply"].includes(a.type) || a.c ? "&c=1" : ""}`, tag: a.post ? "p-" + a.post : a.type === "salida" ? "salida" : "" });
     }
     lote.update(d.ref, { sent: true }); nLote++;
   }

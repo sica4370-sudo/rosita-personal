@@ -167,7 +167,7 @@ async function enter(sid) {
   S.me.photo = (S.dir.find(x => x.id === sid) || {}).photo;
   pushRecent(sid);
   startListeners();
-  setTimeout(() => { S.phase = 'app'; S.tab = 'inicio'; render(); handleDeep(); if (PUSH_OK() && Notification.permission === 'granted') pushToken(false); }, 600);
+  setTimeout(() => { S.phase = 'app'; S.tab = 'inicio'; render(); handleDeep(); checkSalGer(); if (PUSH_OK() && Notification.permission === 'granted') pushToken(false); }, 600);
 }
 function stopListeners() { S.unsub.forEach(f => { try { f(); } catch (e) { } }); S.unsub = []; }
 // Última conexión: se guarda al abrir la app y al volver a ella (máximo una vez cada 3 min)
@@ -197,6 +197,13 @@ function startListeners() {
   const from = addDays(day, -(VENTANA + 5));
   loadHist();
   S.unsub.push(onSnapshot(query(C('cambios'), where('rest', '>=', from)), s => { S.cambios = s.docs.map(d => ({ id: d.id, ...d.data() })); rerender(); }));
+  // Salidas que marcó Gerencia o un jefe por alguien que olvidó marcarla
+  if (!isSup()) S.unsub.push(onSnapshot(query(C('salidasGer'), where('sid', '==', S.me.id)), s => { S.salGer = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.day + a.hm).localeCompare(b.day + b.hm)); checkSalGer(); rerender(); }, e => console.error('salidasGer', e)));
+  if (isMgr()) {
+    S.pendDays = {};
+    for (let i = 1; i <= SAL_DIAS; i++) { const dd = addDays(day, -i); S.unsub.push(onSnapshot(D('days', dd), s => { S.pendDays[dd] = s.exists() ? s.data() : {}; rerender(); }, () => { })); }
+    S.unsub.push(onSnapshot(query(C('salidasGer'), where('day', '>=', addDays(day, -7))), s => { S.salDadas = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => tsMs(b.at) - tsMs(a.at)); rerender(); }, e => console.error('salidasGer', e)));
+  }
   if (isAdmin()) S.unsub.push(onSnapshot(D('meta', 'calendario'), s => { S.gcal = s.exists() ? s.data() : {}; rerender(); }, () => { S.gcal = null; }));
 }
 // Historial de llegadas para las rachas (una sola lectura al entrar; hoy llega en vivo)
@@ -329,7 +336,7 @@ function badgeGrid(sid) {
   return `<div class="h3">Insignias <span>${b.size} de ${BADGES.length}</span></div><div class="bgrid">${BADGES.map(([k, e, n, d]) => `<div class="bdg ${b.has(k) ? 'on' : ''}" title="${esc(d)}"><div>${e}</div><b>${n}</b><small>${d}</small></div>`).join('')}</div>`;
 }
 let rtimer = null;
-function rerender() { if (S.phase !== 'app' || S.sheet) return; clearTimeout(rtimer); rtimer = setTimeout(render, 60); }
+function rerender() { if (S.phase !== 'app' || S.sheet) return; if (salPend().length) return checkSalGer(); clearTimeout(rtimer); rtimer = setTimeout(render, 60); }
 
 /* ================== VISTAS: INGRESO ================== */
 const firma = (cls = '') => `<button class="firma ${cls}" data-about>de <img src="rosita.svg" alt=""> <img class="rlwm" src="wordmark.svg" alt="rosita labs"></button>`;
@@ -396,6 +403,8 @@ function todayInfo(st) {
   return { day, hor, works: worksOn(st, S.horarios[st.horario], day, S.cambios) };
 }
 const XT = ['extra', 'extrafin'];
+// Almuerzo desactivado por ahora (solo entrada y salida). Para volver a activarlo: true
+const LUNCH_ON = false;
 // Horas extra abiertas de una lista de marcas (incluye las que empezaron ayer y siguen de noche)
 function openExtra(marks) { const x = marks.filter(m => XT.includes(m.type)); const l = x[x.length - 1]; return l && l.type === 'extra' ? l : null; }
 // Minutos extra terminados en el día (cada cierre guarda su duración, aunque haya empezado ayer)
@@ -444,7 +453,7 @@ function heroCard() {
     return `<div class="hero h-lunch"><small>📝 Con permiso</small><h2>${!ph ? 'Fuera con permiso' : rest >= 0 ? `Regresas a las ${ph.hasta}` : `Tu regreso era a las ${ph.hasta}`}</h2><p>Saliste a las ${o.hm}</p><button class="hbtn" data-mark="permreg" ${S.busy ? 'disabled' : ''}>${ico('back')} ${S.busy ? 'Verificando ubicación…' : 'Ya regresé'}</button></div>`;
   }
   if (st === 'salio') return `<div class="hero h-done"><small>Hasta mañana</small><h2>Jornada terminada</h2><p>¡Gracias por tu día, ${esc(first(u.n))}! 🌙${extraMin(S.myMarks, day) ? ` · Extra hoy: ${hmin(extraMin(S.myMarks, day))}` : ''}</p>${xbtn}</div>`;
-  const e = S.myMarks.find(x => x.type === 'entrada'), lunchOk = hor.lunch > 0 && !S.myMarks.some(x => x.type === 'almuerzo');
+  const e = S.myMarks.find(x => x.type === 'entrada'), lunchOk = LUNCH_ON && hor.lunch > 0 && !S.myMarks.some(x => x.type === 'almuerzo');
   const permOk = hor.permT === 'medio' && !S.myMarks.some(x => x.type === 'permsal');
   return `<div class="hero h-work"><small><i class="dotok"></i>En turno</small><h2>Trabajando</h2><p>Entraste ${e.hm}${hor.flex ? `${hor.flexIni && !e.late ? ' · a tiempo ✓' : ''} · salida libre` : `${e.late ? '' : ' · a tiempo ✓'} · sales a las ${hor.fin}${hor.medio ? ' (medio día)' : hor.permT === 'sale' ? ' (permiso)' : ''}`}</p>${permOk ? `<p>📝 Tienes permiso de ${hor.perm.desde} a ${hor.perm.hasta}</p>` : ''}
     ${permOk ? `<button class="hbtn" data-mark="permsal" style="margin-bottom:8px">📝 Salir con permiso</button>` : ''}<div class="hrow">${lunchOk ? `<button class="hbtn2" data-mark="almuerzo">${ico('lunch')} Almuerzo</button>` : ''}<button class="hbtn2" data-mark="salida">${ico('out')} Marcar salida</button></div></div>`;
@@ -537,7 +546,7 @@ function bellItems() {
 }
 const bellCount = () => { if (!S.me) return 0; const b = bellAt(); return bellItems().filter(x => x.at > b && (x.k === 'p' || x.unread)).length; };
 function appBadge() { try { const n = bellCount(); if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch (e) { } }
-const BIC = { comment: '💬', reply: '💬', mention: '@', reco: '👏', post: '📣' };
+const BIC = { comment: '💬', reply: '💬', mention: '@', reco: '👏', post: '📣', salida: '⏰' };
 function bellLine(x) {
   const nm = `<b>${x.from === 'rosita' ? 'Rosita' : esc(dirP(x.from).n || 'Alguien')}</b>`;
   if (x.k === 'p') {
@@ -547,7 +556,7 @@ function bellLine(x) {
     return `${nm} ${w}${t ? `: “${esc(snip(t))}”` : ''}`;
   }
   if (x.type === 'rx') return `${nm} reaccionó ${esc(x.tx || '❤️')} a tu publicación`;
-  const w = { comment: 'comentó tu publicación', reply: 'también comentó en una publicación que comentaste', mention: x.c ? 'te mencionó en un comentario' : 'te mencionó en una publicación', reco: 'te dio un reconocimiento 👏' }[x.type] || '';
+  const w = { comment: 'comentó tu publicación', reply: 'también comentó en una publicación que comentaste', mention: x.c ? 'te mencionó en un comentario' : 'te mencionó en una publicación', reco: 'te dio un reconocimiento 👏', salida: 'registró tu salida porque no la marcaste' }[x.type] || '';
   return `${nm} ${w}${x.tx ? `: “${esc(snip(x.tx))}”` : ''}`;
 }
 function bellSheet(sh) {
@@ -564,6 +573,7 @@ function openBell() { S.sheet = { kind: 'avisos', prev: bellAt() }; setBell(Date
 async function bellOpen(id) {
   const x = bellItems().find(y => y.id === id); if (!x) return;
   if (x.k === 'a' && x.unread) { const a = (S.avisos || []).find(y => y.id === x.id); if (a) a.read = true; updateDoc(D('avisos', x.id), { read: true }).catch(() => { }); }
+  if (x.type === 'salida') { S.sheet = { kind: 'salger' }; render(); return; }
   if (!x.post || !S.posts.find(p => p.id === x.post)) { S.sheet = null; render(); return toast('Esa publicación ya no está'); }
   if (['comment', 'reply'].includes(x.type) || (x.type === 'mention' && x.c)) return openComs(x.post);
   S.sheet = null; goPost(x.post);
@@ -842,8 +852,8 @@ function viewInicio() {
 function viewMarcar() {
   const u = S.me, hor = myHor();
   let h = `<div class="hwrap" style="padding-top:14px">${heroCard()}</div><div style="padding:0 16px">`;
-  h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li style="flex-wrap:wrap"><span class="tm">${m.hm}</span><span style="flex:1">${{ entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida', extra: '🌙 Inició horas extra', extrafin: '✅ Terminó horas extra' }[m.type]}</span>${m.avance && m.avance.trim() ? `<small style="display:block;width:100%;color:#65676b;padding-left:52px">📝 ${esc(m.avance)}</small>` : ''}${m.type === 'extrafin' && m.extraMin != null ? `<span class="fl ok">${hmin(m.extraMin)}</span>` : ''}${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' && fixedIn(S.horarios[u.horario]) ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
-  h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor && hor.flex ? `<b>${esc(hor.n)}</b> · horario flexible<br>${hor.flexIni ? `Entrada fija a las <b>${hor.ini}</b> (tolerancia ${hor.tol ?? 5} min). Salida libre y días variados.` : 'Sin hora ni días fijos: marca cuando empieces y cuando termines.'}` : hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}${medioTxt(u) ? `<br>${medioTxt(u)}` : ''}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b>` : 'Sin horario asignado'}</div>`;
+  h += `<div class="h3">Mi día <span>${niceDate(nowParts().day)}</span></div><ul class="tl">${S.myMarks.length ? S.myMarks.map(m => `<li style="flex-wrap:wrap"><span class="tm">${m.hm}</span><span style="flex:1">${m.por ? `🔵 Salida · la marcó ${esc(first(dirP(m.por).n || 'Gerencia'))}` : { entrada: '🟢 Entrada', almuerzo: '🍽️ Salió a almorzar', regreso: '↩️ Regresó de almuerzo', salida: '🔵 Salida', extra: '🌙 Inició horas extra', extrafin: '✅ Terminó horas extra' }[m.type]}</span>${m.avance && m.avance.trim() ? `<small style="display:block;width:100%;color:#65676b;padding-left:52px">📝 ${esc(m.avance)}</small>` : ''}${m.type === 'extrafin' && m.extraMin != null ? `<span class="fl ok">${hmin(m.extraMin)}</span>` : ''}${m.gps && m.gps.inside === false ? '<span class="fl amb">fuera de sitio</span>' : m.late ? `<span class="fl warn">+${m.late} min</span>` : m.type === 'entrada' && fixedIn(S.horarios[u.horario]) ? '<span class="fl ok">a tiempo</span>' : ''}</li>`).join('') : '<li class="empty">Todavía no marcaste hoy.</li>'}</ul>`;
+  h += `<div class="h3">Mi horario</div><div class="note" style="margin-top:0">${hor && hor.flex ? `<b>${esc(hor.n)}</b> · horario flexible<br>${hor.flexIni ? `Entrada fija a las <b>${hor.ini}</b> (tolerancia ${hor.tol ?? 5} min). Salida libre y días variados.` : 'Sin hora ni días fijos: marca cuando empieces y cuando termines.'}` : hor ? `<b>${esc(hor.n)}</b> · ${hor.ini}–${hor.fin}${LUNCH_ON && hor.lunch ? ` · almuerzo ${hor.lunch} min` : ''}<br>Días: ${hor.dias.map(d => DIAS_C[d]).join(', ')}${medioTxt(u) ? `<br>${medioTxt(u)}` : ''}<br>Descanso: <b>${u.descanso >= 0 ? DIAS[u.descanso] : 'según horario'}</b>` : 'Sin horario asignado'}</div>`;
   h += misCambios();
   return h + `</div>`;
 }
@@ -911,13 +921,82 @@ function permTxt(pm, day) {
   if (!s) return ''; if (!r) return ` · salió ${s.hm}`;
   return ` · salió ${s.hm}, regresó ${r.hm}${r.tarde > 0 ? ` (+${r.tarde} min)` : ''}`;
 }
+/* ====== Salidas sin marcar: Gerencia (o el jefe del área) da la salida y la persona recibe un aviso ====== */
+const SAL_DIAS = 3; // días hacia atrás que se revisan
+const hm12 = hm => { const [h, m] = (hm || '0:0').split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'a. m.' : 'p. m.'}`; };
+const diaLargo = ds => { const d = new Date(ds + 'T12:00:00'); return `${DIAS[d.getDay()].toLowerCase()} ${d.getDate()} de ${MESES_L[d.getMonth()]}`; };
+const MESES_L = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+// Personas que marcaron entrada pero no salida (hoy, ya pasada su hora de salida, y los días anteriores)
+function salidasPend() {
+  if (!isMgr()) return [];
+  const np = nowParts(), out = [];
+  for (let i = 0; i <= SAL_DIAS; i++) {
+    const day = addDays(np.day, -i), d = i === 0 ? (S.today || {}) : ((S.pendDays || {})[day] || {});
+    const arr = d.arr || {}, outs = d.out || {};
+    for (const sid of Object.keys(arr)) {
+      const p = S.staff[sid]; if (!p || p.active === false || isSup(p) || outs[sid] || !canGrant(sid)) continue;
+      const hor = horDe(p, day);
+      if (i === 0) { if (!hor || hor.flex || np.min < toMin(hor.fin) + 30) continue; const pm = (S.liveMarks || []).filter(m => m.sid === sid); if (openExtra(pm)) continue; }
+      if (i === 1 && openExtra((S.liveMarks || []).filter(m => m.sid === sid))) continue;
+      out.push({ sid, day, ent: arr[sid].t, fin: hor && !hor.flex ? hor.fin : '' });
+    }
+  }
+  return out.sort((a, b) => b.day.localeCompare(a.day));
+}
+function salPendBlock() {
+  const xs = salidasPend(), dadas = (S.salDadas || []).slice(0, 8);
+  let h = '';
+  if (xs.length) h += `<div class="h3" style="margin-top:0">⚠️ Salidas sin marcar <span>${xs.length}</span></div><div class="lcard">` + xs.map(x => `<div class="lrow">${av(dirP(x.sid))}<div style="flex:1;min-width:0"><b>${esc(dirP(x.sid).n)}</b><small>${x.day === nowParts().day ? 'Hoy' : esc(niceDate(x.day))} · entró ${x.ent}${x.fin ? ` · salía ${x.fin}` : ''}</small></div><button class="st y" style="border:0;cursor:pointer" data-darsal="${x.sid}|${x.day}">Dar salida</button></div>`).join('') + `</div>`;
+  if (dadas.length) h += `<div class="h3"${xs.length ? '' : ' style="margin-top:0"'}>🔵 Salidas que se dieron <span>7 días</span></div><div class="lcard">` + dadas.map(x => `<div class="lrow">${av(dirP(x.sid))}<div style="flex:1;min-width:0"><b>${esc(dirP(x.sid).n)}</b><small>${esc(niceDate(x.day))} · salida ${x.hm} · ${x.por === S.me.id ? 'la diste tú' : `la dio ${esc(first(dirP(x.por).n))}`}</small></div>${x.visto ? `<span class="st g">✓ visto ${ago(tsMs(x.visto))}</span>` : '<span class="st p">aún no lo ve</span>'}</div>`).join('') + `</div>`;
+  return h;
+}
+function darSalSheet(sh) {
+  const p = dirP(sh.sid), n = (S.salGer || []).length;
+  return sheetWrap(`<h4>Dar salida a ${esc(first(p.n))}</h4><div class="sub">${esc(diaLargo(sh.day))} · entró ${sh.ent}</div>
+  <label class="lbl">Hora de salida</label><input id="ds_hm" class="fin" type="time" value="${sh.hm || sh.fin || '18:00'}">
+  <div class="note" style="margin-top:4px">Cuando ${esc(first(p.n))} vuelva a abrir la app le aparecerá un aviso de que su salida la marcaste tú, y tendrá que confirmarlo. Tú verás aquí cuándo lo vio.</div>
+  ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-dssave ${S.busy ? 'disabled' : ''}>Registrar salida</button><button class="wide ghost" data-close>Cancelar</button>`);
+}
+async function saveDarSal() {
+  const sh = S.sheet, hm = ($('#ds_hm') || {}).value || '';
+  if (!/^\d\d:\d\d$/.test(hm)) { sh.err = 'Escoge la hora de salida'; return render(); }
+  if (toMin(hm) <= toMin(sh.ent)) { sh.err = `La salida debe ser después de su entrada (${sh.ent})`; sh.hm = hm; return render(); }
+  const p = S.staff[sh.sid] || {}; S.busy = true; sh.err = null; render();
+  try {
+    const b = writeBatch(db);
+    b.set(doc(C('marks')), { sid: sh.sid, type: 'salida', day: sh.day, hm, min: toMin(hm), at: serverTimestamp(), store: p.store || '', gps: { ok: false }, late: 0, por: S.me.id });
+    b.set(D('days', sh.day), { out: { [sh.sid]: hm } }, { merge: true });
+    b.set(doc(C('salidasGer')), { sid: sh.sid, day: sh.day, hm, ent: sh.ent, por: S.me.id, at: serverTimestamp(), visto: null });
+    b.set(doc(C('avisos')), { to: sh.sid, from: S.me.id, type: 'salida', post: null, c: false, tx: `No marcaste tu salida el ${diaLargo(sh.day)}. Se registró por ti a las ${hm12(hm)}`, at: serverTimestamp(), read: false, sent: false });
+    await b.commit();
+    S.busy = false; S.sheet = null; render(); toast(`Salida registrada · ${first(p.n)} recibirá el aviso`);
+  } catch (e) { console.error(e); S.busy = false; sh.err = 'No se pudo registrar: ' + (e.code || e.message); render(); }
+}
+// Del lado de la persona: aviso al abrir la app hasta que lo confirme
+const salPend = () => (S.salGer || []).filter(x => !x.visto);
+function checkSalGer() { if (S.phase === 'app' && !S.sheet && salPend().length) render(); }
+function salGerSheet() {
+  const pend = salPend(), mes = nowParts().day.slice(0, 7), nMes = (S.salGer || []).filter(x => x.day.startsWith(mes)).length;
+  const xs = pend.length ? pend : (S.salGer || []).slice(-1);
+  return sheetWrap(`<div style="text-align:center"><div style="font-size:46px">⏰</div><h4>${pend.length > 1 ? 'No marcaste tu salida estos días' : 'No marcaste tu salida'}</h4></div>
+  ${xs.map(x => `<div class="note" style="margin:8px 0">El <b>${esc(diaLargo(x.day))}</b> no marcaste tu salida. <b>${esc(dirP(x.por).n || 'Gerencia')}</b> tuvo que registrarla por ti: <b>salida a las ${hm12(x.hm)}</b></div>`).join('')}
+  ${nMes > 1 ? `<div class="sub" style="text-align:center;margin:6px 0;color:var(--warn)">Este mes ya van <b>${nMes}</b> salidas que alguien más tuvo que marcar por ti.</div>` : ''}
+  <div class="sub" style="text-align:center;margin:10px 0">Marcar tu salida es parte de tu compromiso con el equipo: así sabemos que terminaste bien tu jornada. Tu jefe verá cuándo leíste este aviso.</div>
+  ${pend.length ? `<button class="wide" data-salok ${S.busy ? 'disabled' : ''}>💪 Entendido, me comprometo a marcarla</button>` : '<div class="sub" style="text-align:center">✓ Ya lo confirmaste</div><button class="wide ghost" data-close>Cerrar</button>'}`);
+}
+async function salGerOk() {
+  const pend = salPend(); S.busy = true; render();
+  try { const b = writeBatch(db); pend.forEach(x => b.update(D('salidasGer', x.id), { visto: serverTimestamp() })); await b.commit(); pend.forEach(x => { x.visto = { seconds: Date.now() / 1000 }; }); S.busy = false; S.sheet = null; render(); toast('¡Gracias! Hoy no se te olvida 🔵'); }
+  catch (e) { console.error(e); S.busy = false; render(); toast('No se pudo guardar. Revisa tu internet.'); }
+}
 function viewLive() {
   const day = nowParts().day, T = S.today || {}, arr = T.arr || {}, out = T.out || {}, lunch = T.lunch || {};
   const ppl = Object.values(S.staff).filter(p => p.active !== false && !['admin', 'fundador'].includes(p.role));
   const exp = ppl.filter(p => expected(p, day, arr));
   const pres = exp.filter(p => arr[p.id]), late = exp.filter(p => arr[p.id] && arr[p.id].late > 0), npm = nowParts().min;
   const miss = exp.filter(p => { const h = horDe(p, day); return !arr[p.id] && h && !h.flex && npm > toMin(h.ini) + (h.tol || 5); });
-  let h = `<div class="kpis2"><div><b>${pres.length}/${exp.length}</b><span>llegaron</span></div><div class="w"><b>${late.length}</b><span>tarde</span></div><div class="w"><b>${miss.length}</b><span>sin marcar</span></div><div><b>${ppl.length - exp.length}</b><span>descansan</span></div></div>`;
+  let h = isMgr() ? salPendBlock() : '';
+  h += `<div class="kpis2"><div><b>${pres.length}/${exp.length}</b><span>llegaron</span></div><div class="w"><b>${late.length}</b><span>tarde</span></div><div class="w"><b>${miss.length}</b><span>sin marcar</span></div><div><b>${ppl.length - exp.length}</b><span>descansan</span></div></div>`;
   const stores = Object.values(S.stores).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
   for (const st of stores) {
     const team = ppl.filter(p => p.store === st.id); if (!team.length) continue;
@@ -956,7 +1035,7 @@ function viewPeople() {
 function viewHorarios() {
   const hs = Object.values(S.horarios).sort((a, b) => a.n.localeCompare(b.n));
   return `<button class="wide" data-hnew style="margin-bottom:12px">＋ Nuevo horario</button><div class="note" style="margin:0 0 12px">Los horarios son plantillas: a cada persona le asignas uno y además su día de descanso. Ajusta estos ejemplos a los horarios reales de cada tienda.</div>` +
-    hs.map(x => { const n = Object.values(S.staff).filter(p => p.horario === x.id).length; return `<button class="urow" data-hedit="${x.id}"><div class="hic">${ico('clock')}</div><div style="flex:1"><b>${esc(x.n)}</b><small>${x.flex ? (x.flexIni ? `Flexible · entra ${x.ini} · salida libre · días variados · sin horas extra` : 'Flexible · sin hora ni días fijos · sin horas extra') : `${x.ini}–${x.fin} · ${x.dias.map(d => DIAS_C[d]).join(' ')}${x.lunch ? ` · almuerzo ${x.lunch} min` : ' · sin almuerzo'}`} · ${n} ${n === 1 ? 'persona' : 'personas'}</small></div>${ico('edit')}</button>`; }).join('');
+    hs.map(x => { const n = Object.values(S.staff).filter(p => p.horario === x.id).length; return `<button class="urow" data-hedit="${x.id}"><div class="hic">${ico('clock')}</div><div style="flex:1"><b>${esc(x.n)}</b><small>${x.flex ? (x.flexIni ? `Flexible · entra ${x.ini} · salida libre · días variados · sin horas extra` : 'Flexible · sin hora ni días fijos · sin horas extra') : `${x.ini}–${x.fin} · ${x.dias.map(d => DIAS_C[d]).join(' ')}${LUNCH_ON ? (x.lunch ? ` · almuerzo ${x.lunch} min` : ' · sin almuerzo') : ''}`} · ${n} ${n === 1 ? 'persona' : 'personas'}</small></div>${ico('edit')}</button>`; }).join('');
 }
 function viewStores() {
   const st = Object.values(S.stores).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
@@ -1017,6 +1096,8 @@ function sheetHtml() {
     <div id="map"></div><div class="rsmall" id="m_ll" style="margin:6px 0">${sh.lat ? `${sh.lat.toFixed(5)}, ${sh.lng.toFixed(5)}` : 'Sin punto elegido'}</div>
     <div style="display:flex;gap:8px"><button class="wide ghost" data-mcancel style="margin:0;flex:1">Cancelar</button><button class="wide" data-mok style="margin:0;flex:2">Usar esta ubicación</button></div></div></div>`;
   if (sh.kind === 'cambio') return cambioSheet(sh);
+  if (sh.kind === 'darsal') return darSalSheet(sh);
+  if (sh.kind === 'salger') return salGerSheet(sh);
   if (sh.kind === 'permiso') return permisoSheet(sh);
   if (sh.kind === 'pin') return sheetWrap(`<h4>Cambiar mi PIN</h4><div class="sub">Necesitas tu PIN actual</div>
     <input id="p_old" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="PIN actual"><input id="p_new" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="PIN nuevo"><input id="p_new2" class="fin pinin" type="password" inputmode="numeric" maxlength="4" placeholder="Repite el PIN nuevo">
@@ -1113,8 +1194,8 @@ function horSheet(sh) {
   <div style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Entrada</label><input id="h_i" class="fin" type="time" value="${x.ini}"></div><div style="flex:1"><label class="lbl">Salida</label><input id="h_f" class="fin" type="time" value="${x.fin}"></div></div>
   <label class="lbl">Días que se trabaja</label><div class="daypick">${DIAS_C.map((d, i) => `<label><input type="checkbox" value="${i}" ${x.dias.includes(i) ? 'checked' : ''}><span>${d}</span></label>`).join('')}</div>
   <div class="rsmall" style="margin:4px 0 10px">El día de descanso de cada persona se resta de estos días.</div>
-  <div style="display:flex;gap:8px"><div style="flex:1"><label class="lbl">Almuerzo (min)</label><input id="h_l" class="fin" type="number" min="0" step="5" value="${x.lunch}"></div><div style="flex:1"><label class="lbl">Tolerancia (min)</label><input id="h_t" class="fin" type="number" min="0" value="${x.tol ?? 5}"></div></div>
-  <div class="rsmall" style="margin:-2px 0 10px">Almuerzo en 0 = no marcan almuerzo.</div></div>
+  <div style="display:flex;gap:8px"><div style="flex:1" ${LUNCH_ON ? '' : 'hidden'}><label class="lbl">Almuerzo (min)</label><input id="h_l" class="fin" type="number" min="0" step="5" value="${x.lunch}"></div><div style="flex:1"><label class="lbl">Tolerancia (min)</label><input id="h_t" class="fin" type="number" min="0" value="${x.tol ?? 5}"></div></div>
+  ${LUNCH_ON ? '<div class="rsmall" style="margin:-2px 0 10px">Almuerzo en 0 = no marcan almuerzo.</div>' : ''}</div>
   ${sh.err ? `<div class="err">${esc(sh.err)}</div>` : ''}<button class="wide" data-hsave ${S.busy ? 'disabled' : ''}>Guardar</button><button class="wide ghost" data-close>Cancelar</button>`);
 }
 function storeSheet(sh) {
@@ -1202,6 +1283,8 @@ function render() {
   if (S.phase === 'boot' || S.phase === 'loading') { root.innerHTML = loadView(); return; }
   if (S.phase === 'error') { root.innerHTML = `<div class="body" style="padding:40px 20px;text-align:center"><img src="rosita.svg" style="width:80px"><p>${esc(S.err)}</p><button class="wide" onclick="location.reload()">Reintentar</button></div>`; return; }
   if (S.phase === 'setup') { root.innerHTML = viewSetup() + sheetHtml(); return; }
+  // El aviso de salida marcada por otra persona aparece en cuanto no haya otra ventana abierta
+  if (S.phase === 'app' && !S.sheet && S.me && salPend().length) S.sheet = { kind: 'salger' };
   if (S.phase === 'login') { root.innerHTML = viewLogin() + sheetHtml(); if (S.q) filterWho(); return; }
   if (comUnsub && !(S.sheet && S.sheet.kind === 'coms')) { comUnsub(); comUnsub = null; }
   const t = S.tab, gt = gestionTabs().length, bc = bellCount();
@@ -1399,6 +1482,9 @@ document.addEventListener('click', async e => {
   if (d.sub) { S.sub = d.sub; render(); return; }
   if (d.scope) { S.scope = d.scope; render(); return; }
   if (d.mark) return doMark(d.mark);
+  if (d.darsal) { const [sid, day] = d.darsal.split('|'), x = salidasPend().find(y => y.sid === sid && y.day === day); if (!x) return toast('Ya tiene su salida'); S.sheet = { kind: 'darsal', ...x }; render(); return; }
+  if (d.dssave !== undefined) return saveDarSal();
+  if (d.salok !== undefined) return salGerOk();
   if (d.avok !== undefined) { const v = ($('#av_tx') || {}).value || ''; S.sheet = null; return doMark('salida', v.trim() || ' '); }
   if (d.xyes !== undefined) { S.sheet = null; return doMark('extra'); }
   if (d.xno !== undefined) { S.sheet = null; return doMark('entrada', true); }

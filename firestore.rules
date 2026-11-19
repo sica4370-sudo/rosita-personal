@@ -61,7 +61,10 @@ service cloud.firestore {
     match /marks/{id} {
       allow read: if hasMe() && (resource.data.sid == me().sid
         || role() in ['admin', 'jefe', 'fundador', 'encargada']);
-      allow create: if hasMe() && request.resource.data.sid == me().sid;
+      allow create: if hasMe() && request.resource.data.sid == me().sid && !('por' in request.resource.data);
+      // Salida que da Gerencia (o el jefe del área) a quien olvidó marcarla
+      allow create: if request.resource.data.type == 'salida' && request.resource.data.get('por', '') == me().sid
+        && canGrant(request.resource.data.sid);
       allow update, delete: if isAdmin();
     }
 
@@ -74,6 +77,20 @@ service cloud.firestore {
         && request.resource.data.get('arr', {}).diff(resource.data.get('arr', {})).affectedKeys().hasOnly([me().sid])
         && request.resource.data.get('out', {}).diff(resource.data.get('out', {})).affectedKeys().hasOnly([me().sid])
         && request.resource.data.get('lunch', {}).diff(resource.data.get('lunch', {})).affectedKeys().hasOnly([me().sid]);
+      // Gerencia y jefes pueden registrar la salida de otra persona (solo el mapa de salidas, una a la vez)
+      allow update: if isMgr()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['out'])
+        && request.resource.data.get('out', {}).diff(resource.data.get('out', {})).affectedKeys().size() == 1;
+    }
+
+    // Salidas que marcó Gerencia o un jefe: la persona ve el aviso y confirma que lo leyó
+    match /salidasGer/{id} {
+      allow read: if hasMe() && (resource.data.sid == me().sid || isMgr());
+      allow create: if hasMe() && request.resource.data.por == me().sid && canGrant(request.resource.data.sid)
+        && request.resource.data.keys().hasOnly(['sid', 'day', 'hm', 'ent', 'por', 'at', 'visto'])
+        && request.resource.data.visto == null;
+      allow update: if hasMe() && resource.data.sid == me().sid && onlyKeys(['visto']);
+      allow delete: if isAdmin();
     }
 
     // Cambios de día de descanso
@@ -118,7 +135,7 @@ service cloud.firestore {
       allow read: if hasMe() && resource.data.to == me().sid;
       allow create: if hasMe() && request.resource.data.from == me().sid && request.resource.data.to != me().sid
         && request.resource.data.keys().hasOnly(['to', 'from', 'type', 'post', 'c', 'tx', 'at', 'read', 'sent'])
-        && request.resource.data.type in ['comment', 'reply', 'mention', 'reco', 'rx']
+        && request.resource.data.type in ['comment', 'reply', 'mention', 'reco', 'rx', 'salida']
         && request.resource.data.tx is string && request.resource.data.tx.size() <= 140;
       allow update: if hasMe() && resource.data.to == me().sid && onlyKeys(['read']);
       allow delete: if hasMe() && resource.data.to == me().sid;

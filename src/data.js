@@ -6,7 +6,7 @@ export const ROLES = {
   sistemas:  { l: 'Sistemas',            d: 'Crea usuarios, restablece PINs, publica anuncios y fotos y reconoce' },
   encargada: { l: 'Encargada de tienda', d: 'Publica fotos y anuncios en su tienda y reconoce a su equipo' },
   asesora:   { l: 'Asesora de ventas',   d: 'Marca entrada y salida y participa en el muro' },
-  apoyo:     { l: 'Apoyo / oficina',     d: 'Marca entrada, almuerzo y salida' }
+  apoyo:     { l: 'Apoyo / oficina',     d: 'Marca entrada y salida' }
 };
 export const ROLE_ORDER = ['admin', 'fundador', 'jefe', 'sistemas', 'encargada', 'asesora', 'apoyo'];
 
